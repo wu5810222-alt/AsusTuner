@@ -23,6 +23,12 @@ pub mod qobject {
         #[qproperty(f64, fan1_rpm)]
         #[qproperty(f64, fan2_rpm)]
         #[qproperty(f64, cpu_power)]
+        #[qproperty(f64, ppt_pl1)]
+        #[qproperty(f64, ppt_pl2)]
+        #[qproperty(f64, ppt_pl3)]
+        #[qproperty(u32, ppt_min)]
+        #[qproperty(u32, ppt_max)]
+        #[qproperty(bool, ppt_available)]
         #[qproperty(u32, charge_limit)]
         #[qproperty(bool, backend_running)]
         #[namespace = "asustuner"]
@@ -162,6 +168,12 @@ pub struct AsusTunerRust {
     fan1_rpm: f64,
     fan2_rpm: f64,
     cpu_power: f64,
+    ppt_pl1: f64,
+    ppt_pl2: f64,
+    ppt_pl3: f64,
+    ppt_min: u32,
+    ppt_max: u32,
+    ppt_available: bool,
     charge_limit: u32,
     backend_running: bool,
 }
@@ -180,6 +192,12 @@ impl Default for AsusTunerRust {
             fan1_rpm: 0.0,
             fan2_rpm: 0.0,
             cpu_power: -1.0,
+            ppt_pl1: 0.0,
+            ppt_pl2: 0.0,
+            ppt_pl3: 0.0,
+            ppt_min: 0,
+            ppt_max: 0,
+            ppt_available: false,
             charge_limit: 100,
             backend_running: false,
         }
@@ -442,6 +460,17 @@ fn read_cpu_freq() -> Option<f64> {
     }
 }
 
+/// asus-armoury 固件属性读取（0644 世界可读，免 root）。
+fn read_armoury(attr: &str, field: &str) -> Option<u32> {
+    std::fs::read_to_string(format!(
+        "/sys/class/firmware-attributes/asus-armoury/attributes/{attr}/{field}"
+    ))
+    .ok()?
+    .trim()
+    .parse()
+    .ok()
+}
+
 fn detect_board_name() -> Option<String> {
     std::fs::read_to_string("/sys/devices/virtual/dmi/id/board_name")
         .ok()
@@ -570,6 +599,28 @@ impl qobject::AsusTunerObject {
                     }
                 }
             }
+        }
+
+        // asus-armoury 功率墙读回（PL1=STAPM / PL2=SPPT(慢) / PL3=FPPT(快)）
+        let (pl1, pl2, pl3) = (
+            read_armoury("ppt_pl1_spl", "current_value"),
+            read_armoury("ppt_pl2_sppt", "current_value"),
+            read_armoury("ppt_pl3_fppt", "current_value"),
+        );
+        match (pl1, pl2, pl3) {
+            (Some(a), Some(b), Some(c)) => {
+                self.as_mut().set_ppt_available(true);
+                self.as_mut().set_ppt_pl1(a as f64);
+                self.as_mut().set_ppt_pl2(b as f64);
+                self.as_mut().set_ppt_pl3(c as f64);
+                if let Some(mn) = read_armoury("ppt_pl1_spl", "min_value") {
+                    self.as_mut().set_ppt_min(mn);
+                }
+                if let Some(mx) = read_armoury("ppt_pl1_spl", "max_value") {
+                    self.as_mut().set_ppt_max(mx);
+                }
+            }
+            _ => self.as_mut().set_ppt_available(false),
         }
 
         self.as_mut().set_backend_running(backend_connected());

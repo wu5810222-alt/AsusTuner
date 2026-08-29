@@ -296,20 +296,138 @@ ApplicationWindow {
                     spacing: 10
 
                     GroupBox {
-                        title: qsTr("功率墙 (mW)")
+                        title: tuner.ppt_available ? qsTr("功率墙 (W) — 范围读自 BIOS 固件") : qsTr("功率墙 (mW)")
                         Layout.fillWidth: true
+
+                        // 首次可用时把滑条对齐到固件当前值（+兜底定时同步）
+                        Timer {
+                            interval: 800
+                            running: true
+                            repeat: false
+                            onTriggered: {
+                                if (tuner.ppt_available) {
+                                    pl1Slider.value = tuner.ppt_pl1
+                                    pl3Slider.value = tuner.ppt_pl3
+                                    pl2Slider.value = tuner.ppt_pl2
+                                }
+                            }
+                        }
+                        Connections {
+                            target: tuner
+                            function onPptAvailableChanged() {
+                                if (tuner.ppt_available) {
+                                    pl1Slider.value = tuner.ppt_pl1
+                                    pl3Slider.value = tuner.ppt_pl3
+                                    pl2Slider.value = tuner.ppt_pl2
+                                }
+                            }
+                        }
+
                         ColumnLayout {
-                            anchors.fill: parent
+                            anchors.left: parent.left
+                            anchors.right: parent.right
                             spacing: 8
+
+                            // ---- armoury 模式：瓦特滑条（范围/当前值来自固件）----
                             RowLayout {
                                 spacing: 8
+                                visible: tuner.ppt_available
+                                Layout.fillWidth: true
+                                Button {
+                                    text: "45W"
+                                    onClicked: { pl1Slider.value = 45; pl3Slider.value = Math.min(65, tuner.ppt_max); pl2Slider.value = 45 }
+                                }
+                                Button {
+                                    text: "65W"
+                                    onClicked: { pl1Slider.value = 65; pl3Slider.value = Math.min(90, tuner.ppt_max); pl2Slider.value = 65 }
+                                }
+                                Button {
+                                    text: "80W"
+                                    onClicked: { pl1Slider.value = 80; pl3Slider.value = Math.min(120, tuner.ppt_max); pl2Slider.value = 80 }
+                                }
+                                Label { text: qsTr("预设"); color: palette.mid; font.pixelSize: 12 }
+                                Item { Layout.fillWidth: true }
+                                Button {
+                                    text: qsTr("读取固件值")
+                                    onClicked: {
+                                        pl1Slider.value = tuner.ppt_pl1
+                                        pl3Slider.value = tuner.ppt_pl3
+                                        pl2Slider.value = tuner.ppt_pl2
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                spacing: 10
+                                visible: tuner.ppt_available
+                                Layout.fillWidth: true
+                                Label { text: qsTr("持续 PL1"); color: palette.text; Layout.preferredWidth: 64 }
+                                Slider {
+                                    id: pl1Slider
+                                    Layout.fillWidth: true
+                                    from: tuner.ppt_min; to: tuner.ppt_max; stepSize: 1
+                                }
+                                Label { text: pl1Slider.value + " W"; color: palette.text; Layout.preferredWidth: 56 }
+                            }
+                            RowLayout {
+                                spacing: 10
+                                visible: tuner.ppt_available
+                                Layout.fillWidth: true
+                                Label { text: qsTr("瞬时 PL3"); color: palette.text; Layout.preferredWidth: 64 }
+                                Slider {
+                                    id: pl3Slider
+                                    Layout.fillWidth: true
+                                    from: tuner.ppt_min; to: tuner.ppt_max; stepSize: 1
+                                }
+                                Label { text: pl3Slider.value + " W"; color: palette.text; Layout.preferredWidth: 56 }
+                            }
+                            RowLayout {
+                                spacing: 10
+                                visible: tuner.ppt_available
+                                Layout.fillWidth: true
+                                Label { text: qsTr("平均 PL2"); color: palette.text; Layout.preferredWidth: 64 }
+                                Slider {
+                                    id: pl2Slider
+                                    Layout.fillWidth: true
+                                    from: tuner.ppt_min; to: tuner.ppt_max; stepSize: 1
+                                }
+                                Label { text: pl2Slider.value + " W"; color: palette.text; Layout.preferredWidth: 56 }
+                            }
+
+                            RowLayout {
+                                spacing: 8
+                                visible: tuner.ppt_available
+                                Layout.fillWidth: true
+                                Button {
+                                    text: qsTr("应用功率墙")
+                                    highlighted: true
+                                    onClicked: tuner.setPowerLimits(
+                                        pl1Slider.value * 1000,
+                                        pl3Slider.value * 1000,
+                                        pl2Slider.value * 1000)
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: qsTr("固件当前: PL1 %1W / PL2 %2W / PL3 %3W")
+                                        .arg(tuner.ppt_pl1.toFixed(0)).arg(tuner.ppt_pl2.toFixed(0)).arg(tuner.ppt_pl3.toFixed(0))
+                                    color: palette.mid
+                                    font.pixelSize: 11
+                                }
+                            }
+
+                            // ---- 兜底模式：SpinBox (mW) ----
+                            RowLayout {
+                                spacing: 8
+                                visible: !tuner.ppt_available
+                                Layout.fillWidth: true
                                 Button { text: "45W"; onClicked: tuner.setPowerLimits(45000, 65000, 45000) }
                                 Button { text: "65W"; onClicked: tuner.setPowerLimits(65000, 90000, 65000) }
                                 Button { text: "80W"; onClicked: tuner.setPowerLimits(80000, 120000, 80000) }
-                                Label { text: qsTr("预设一键应用"); color: palette.mid; font.pixelSize: 12 }
+                                Label { text: qsTr("预设"); color: palette.mid; font.pixelSize: 12 }
                             }
                             RowLayout {
                                 spacing: 8
+                                visible: !tuner.ppt_available
                                 ColumnLayout {
                                     spacing: 2
                                     Label { text: qsTr("STAPM 持续"); font.pixelSize: 11; color: palette.mid }
