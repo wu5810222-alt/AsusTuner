@@ -171,12 +171,16 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 - ✅ 实验脚本 scripts/armoury-experiment.sh（sudo 跑）：T1 同值通道/T2 +5W+ryzenadj 交叉对读/T3 档位联动（EnablePptGroup 暗示 ppt 可能挂档位下）；尾部含 D-Bus 免根写入试探（gdbus Set AsusArmoury CurrentValue）与重启持久化检查指引
 - 裁决记录：Q2 dGPU 纳入路线图(依赖实验)/Q4 托盘已落地不再裁决/Q5 电池健康页排期/Q6 定位=「G-Helper 体验+asusd 缺口」不做 rog-control-center 替代品，GPU 模式优先 armoury gpu_mux_mode/dgpu_disable（接口已实测存在）而非 supergfxd
 
+**2026-08-30 八轮（实验结果落地：功率墙迁移 armoury，commit 1e941d0）**：
+用户实验实测：T1 写入通道✓ / T2 固件接受并保持(+5W)✓ / T3 与档位解耦（切档不重写）✓ / **D-Bus 免根写入可用**（asusd AsusArmoury CurrentValue Set 普通用户无报错）/ **固件不跨重启持久**（回 100）。
+落地：backend `write_power()` = armoury sysfs 三写（stapm→PL1/fast→PL3/slow→PL2，mW→W，150ms 固件间隔），`set_power`/`apply_state` 均改走它；无 armoury 机型回退 ryzenadj；**ryzenadj 保留**降压/温度墙/终端直通。功率墙**保留在启动重放名单**（不持久已证实）。行为级验证方法：功率墙设 45W → 跑压力 → 监控页 CPU 功率应压在 ~45W（RAPL 实测）。
+已知备选路径：asusd D-Bus 免根写 armoury（GUI/CLI 将来可不依赖后端写功率墙；CLI 免 sudo 路径候选）。
+
 **待办（优先级序）**：
-1. **等用户跑实验脚本** → 裁决功率墙写入迁移（armoury vs ryzenadj）+ 持久化设计简化
-2. 用户 `sudo ./install.sh` 真实部署实测（睡眠恢复/ppd 夺回/托盘）
-3. dGPU 控制（nv_temp_target/nv_dynamic_boost/nv_tgp，依赖实验）
-4. GPU 模式页（armoury gpu_mux_mode/dgpu_disable）/ 电池健康页 / 监控历史曲线
-5. ppd 事件链路实测（asusd 有 watch_platform_profile 痕迹，事件未必收不到——但不影响混合方案）
+1. 用户 `sudo ./install.sh` 部署 + 行为级验证（45W 压测看 RAPL）+ 睡眠/ppd/托盘实测
+2. dGPU 控制（nv_temp_target/nv_dynamic_boost/nv_tgp——同走 armoury sysfs/D-Bus，模式照抄 write_power）
+3. GPU 模式页（armoury gpu_mux_mode/dgpu_disable）/ 电池健康页 / 监控历史曲线
+4. GUI 拆紧凑模式（托盘双击小面板）/ CLI power 免 sudo 化（D-Bus 路径）
 
 ## 10. 交接注意
 
