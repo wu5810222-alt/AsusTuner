@@ -15,7 +15,7 @@
 //   直通(不持久): ryzenadj{args} exec{args} rapl
 
 use std::io::{BufRead, Write};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::{LazyLock, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -297,10 +297,13 @@ fn apply_state() {
             &l.to_string(),
         );
         log(&format!("键盘亮度 {l}: {}", r.0));
+        // WMI 写入异步生效，给固件落定时间（z-helper 踩坑经验）
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
     if let Some(a) = st.aura {
         let r = kbd_rgb_mode(a.mode, a.r, a.g, a.b, a.speed);
         log(&format!("Aura mode={}: {}", a.mode, r.0));
+        std::thread::sleep(std::time::Duration::from_millis(150));
     }
 }
 
@@ -619,12 +622,43 @@ fn watch_profile() {
     });
 }
 
+/// 低频校验轮询（兜底腿）：ppd 等可能直写 sysfs 绕过 asusd 事件链路，
+/// 定期比对当前档位与保存值，漂移才写回——笨但什么都兜得住。
+fn verify_loop() {
+    let secs: u64 = std::env::var("ASUSTUNER_VERIFY_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(45);
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(secs));
+        let st = STATE.lock().unwrap().clone();
+        let (Some(saved), true) = (&st.profile, st.profile_lock) else {
+            continue;
+        };
+        let Ok(p) = platform_proxy() else {
+            continue;
+        };
+        let cur = proxy_current_profile(&p).unwrap_or(u32::MAX);
+        let want = profile_val(saved).unwrap_or(u32::MAX);
+        if cur != want {
+            log(&format!("校验轮询发现档位漂移（当前 {cur} ≠ 保存 {saved}），夺回"));
+            let _ = asusd_set_profile(saved);
+        }
+    });
+}
+
 fn main() {
+    // 单例守护（先于 apply_state，避免第二实例重复写硬件后互相夺回打架）
+    if UnixStream::connect(socket_path()).is_ok() {
+        log("检测到已有后端实例在运行，本实例退出");
+        std::process::exit(0);
+    }
     log("asustuner-backend 启动（常驻 socket 模式）");
     // 启动即恢复已保存状态（覆盖重启重置）
     apply_state();
     watch_sleep();
     watch_profile();
+    verify_loop();
     if let Err(e) = serve_socket() {
         log(&format!("socket 服务失败: {e}"));
         std::process::exit(1);
