@@ -1,0 +1,23 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/asustuner-gui",
+    "crates/asustuner-cli",
+    "crates/asustuner-backend",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+authors = ["AsusTuner contributors"]
+repository = "https://github.com/your-org/asustuner"
+
+[workspace.dependencies]
+zbus = "4"
+anyhow = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

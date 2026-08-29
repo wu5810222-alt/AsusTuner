@@ -1,0 +1,12 @@
+# Rust 构建产物
+/target
+
+# QML 前端构建产物
+/app/build/
+
+# IDE / 工具
+.vscode/
+.idea/
+*.swp
+.zcode/
+crates/asustuner-gui/.qmlls.ini

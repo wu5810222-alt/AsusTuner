@@ -1,0 +1,17 @@
+[package]
+name = "asustuner-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AsusTuner 命令行客户端（直连 asusd + ryzenadj）"
+
+[[bin]]
+name = "asustuner-cli"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+zbus = { workspace = true, features = ["blocking"] }
+anyhow = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+zvariant = "4"

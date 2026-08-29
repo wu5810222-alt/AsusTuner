@@ -1,0 +1,13 @@
+[package]
+name = "asustuner-backend"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "AsusTuner 特权后端（root，JSON 行协议 over stdio）"
+
+[[bin]]
+name = "asustuner-backend"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"

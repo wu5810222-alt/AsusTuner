@@ -1,0 +1,173 @@
+# AsusTuner Check-in（交接与改进基线）
+
+> 更新日期：2026-08-29 · 平台：ASUS TUF Gaming A16 FA607PV · KDE Wayland · Arch Linux
+> 用途：新会话/新维护者快速接手；改进前先读 §6 教训与 §9 计划。
+
+---
+
+## 1. 项目定位与设计原则
+
+**一句话**：华硕天选/TUF/ROG 笔记本的 Linux 控制前端，功能对标 G-Helper。
+
+**核心设计原则（不可违背）**：
+1. **不自建守护进程、不自写 sysfs 硬件层**——asusd（系统已有，root 运行）管风扇曲线/性能档位/EPP/充电限制/键盘灯；ryzenadj 管 AMD 功率墙/降压。本项目只是**前端**。
+2. **能调用就不重复实现**——优先调 asusd 的 D-Bus、ryzenadj 的 CLI。
+3. **每个写操作必须验证生效**（读回确认），不能只验证"能编译/能弹窗"。
+4. 接口不写死机型，通过运行时探测/读 asusd 适配。
+
+## 2. 当前架构
+
+```
+AsusTuner/
+├── crates/
+│   ├── asustuner-gui/    # QML + cxx-qt (Qt6) 前端，直连 asusd D-Bus + 调 ryzenadj
+│   │   ├── src/main.rs           # Qt 入口
+│   │   ├── src/cxxqt_object.rs   # QObject 桥（属性/invokable）
+│   │   ├── src/fan_curves.rs     # asusd FanCurves 接口类型复刻 + zbus proxy
+│   │   └── qml/main.qml          # 界面
+│   ├── asustuner-cli/    # 命令行（直连 asusd + ryzenadj）
+│   │   ├── src/main.rs
+│   │   └── src/fan.rs            # FanCurves 类型 + 读写封装
+│   └── asustuner-backend/ # root 特权后端（JSON 行协议 over stdio，pkexec 启动）
+├── run.sh                # 一键构建+启动 GUI
+├── CHECKIN.md            # 本文件
+└── README.md
+```
+
+**数据流**：GUI/CLI → (D-Bus) asusd → 硬件；GUI/CLI → (subprocess) ryzenadj → SMU；GUI → (只读 sysfs) 传感器监控。
+
+**已删除**（历史上走过弯路，勿恢复）：asustuner-daemon（自研守护进程）、asustuner-shared（协议库）、自写 hardware/* sysfs 层、systemd/ 自建服务、config/ 档位文件。
+
+## 3. 硬件基线（本机实测）
+
+| 项 | 值 |
+|---|---|
+| 机型 | ASUS TUF Gaming A16 FA607PV（DMI board_name=FA607PV） |
+| CPU | Ryzen 9 7940HX，32 线程，amd-pstate-epp 驱动 |
+| dGPU | RTX 4060 Laptop（nvml 可用，暂未接） |
+| 温度源 | k10temp（CPU）、amdgpu hwmon（iGPU）、/dev/mem 走 ryzenadj |
+| 风扇 | hwmon name=asus：fan1_input/fan2_input（RPM，只读免 root） |
+| 键盘灯 | /sys/class/leds/asus::kbd_backlight/brightness（0-3，root 可写） |
+| CPU boost | /sys/devices/system/cpu/cpufreq/boost（root） |
+| 系统 | Rust 1.98 · Qt 6.11.2 · zbus 4.4 · cxx-qt 0.10 · asusd 6.3.8 · ryzenadj 0.19.0 |
+
+## 4. 功能状态表
+
+| 功能 | 实现路径 | 状态 |
+|---|---|---|
+| 性能档位 quiet/balanced/performance | asusd `PlatformProfile` (property, u32) | ✅ CLI 读回验证 + gdbus 验证 |
+| 充电限制 60/80/100 | asusd `ChargeControlEndThreshold` (property, u8) | ✅ 接口通（GUI 按钮） |
+| 风扇曲线读 | asusd `fan_curve_data(profile)` | ✅ CLI fan-get 验证 |
+| 风扇曲线写/恢复默认 | asusd `set_fan_curve` / `set_curves_to_defaults` | ✅ CLI fan-set 写回+读回验证 |
+| GUI 全部界面 | QML | ✅ 截图视觉验证（监控/档位/降压/功率墙/风扇曲线/充电） |
+| 实时监控 | 只读 sysfs | ✅ |
+| 功率墙 STAPM/FAST/SLOW | GUI→root 后端→ryzenadj `--stapm-limit=…` | ✅ 后端协议验证；root 授权后生效 |
+| CPU 降压 Curve Optimiser | GUI→root 后端→ryzenadj `--set-coall= --set-cogfx=` | ✅ 同上 |
+| 温度墙 Tctl / CPU Boost / 键盘灯 | root 后端（sysfs/ryzenadj） | ✅ 已接（UI: 性能页） |
+| 风扇曲线图形编辑器 | QML Canvas 8 点可拖拽 + 预设 + CPU/GPU 切换 | ✅ 已实现（写链路经 CLI 验证） |
+| 后端日志/终端面板 | GUI 底部可折叠面板：后端 stdout/stderr + root 命令行 | ✅ 已实现 |
+| GPU 模式（supergfxctl） | supergfxd 本机未启用 | ❌ 留接口 |
+
+## 5. 关键接口速查
+
+### asusd（system bus，服务名 `xyz.ljones.Asusd`，普通用户可读写——已实测）
+- 路径 `/xyz/ljones`，多接口同路径按 interface 名区分：
+- **`xyz.ljones.Platform`**（property 经 `org.freedesktop.DBus.Properties.Get/Set`）：
+  - `PlatformProfile` u32：0=Balanced 1=Performance 2=Quiet 3=LowPower
+  - `PlatformProfileChoices` → [u32]
+  - `ChargeControlEndThreshold` u8（充电限制 %）
+  - `ProfileQuietEpp/BalancedEpp/PerformanceEpp` u32
+- **`xyz.ljones.FanCurves`**（方法调用）：
+  - `fan_curve_data(profile:u32) -> Vec<CurveData>`
+  - `set_fan_curve(profile:u32, curve:CurveData)`（自动激活）
+  - `set_curves_to_defaults(profile:u32)`
+  - `CurveData = { fan: FanCurvePU, pwm: [u8;8], temp: [u8;8], enabled: bool }`
+  - **`FanCurvePU` 在 D-Bus 上是字符串签名 "s"**（"CPU"/"GPU"/"MID"），不是整数！`PlatformProfile` 是 u32 签名 "u"。
+- `xyz.ljones.Aura` @ `/xyz/ljones/Aura`：键盘 RGB（未接）
+- 本地复刻见 `crates/*/src/fan_curves.rs`（zbus4 `#[proxy]` + `#[derive(Type)]`，已验证可用）
+
+### ryzenadj 0.19.0
+- **只能用长选项带等号**：`--stapm-limit=45000`；短选项粘等号 `-a=45000` 会报 "expects an unsigned 32-bit integer"（源码 argparse 证实）
+- 降压：`--set-coall=-30`（负值合法，strtol 解析为 int）；iGPU：`--set-cogfx=`
+- 温度墙：`--tctl-temp=90`
+- **需要 root**（/dev/mem，root:kmem）；普通用户报 "no compatible ryzen_smu kernel module found, fallback to /dev/mem" + pcilib 权限错
+- 二进制：/usr/sbin/ryzenadj
+
+### 只读监控（免 root）
+- 温度：/sys/class/hwmon/*/name 匹配 k10temp、amdgpu → temp1_input（毫度）
+- 风扇 RPM：hwmon name=asus → fan1_input/fan2_input
+- CPU 频率：/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq（kHz）
+- 电池：/sys/class/power_supply/BAT0/{capacity,status}
+
+## 6. 教训（血泪，必读）
+
+1. **过度设计是大坑**：最初建了"特权守护进程+协议库+自写 sysfs 层"三层架构（2400 行），而 asusd 现成接口全都有。已全部删除，精简到 ~700 行。**新增功能先查 asusd 有没有现成接口。**
+2. **写操作必须读回验证**：曾只验证"读监控+弹窗"，实际所有写操作因 root 权限静默失败，用户反馈"完全起不到作用"。
+3. **普通用户可直连 asusd 写**（gdbus 实测 PlatformProfile Set 生效），不要想当然认为 D-Bus 系统服务都要 root。
+4. **ryzenadj 参数格式**：短选项粘等号不被解析（用长选项）。
+5. **cxx-qt bridge 语法限制**：bridge 宏展开的文件里**不能用 let-else**（报 expected `;`，用 match）；QString→String 用 `.into()`（无 .as_str()）；qproperty 名用 snake_case（getter/getXxx、C++ setter 是 PascalCase）；改属性的 invokable 签名 `self: Pin<&mut Self>` 且实现里用 `self.as_mut().set_xxx()`；QML `console.log` 不进 stderr，验证 QML JS 执行需在 Rust invokable 里 eprintln。
+6. **zvariant derive**：zvariant 4 没有 `derive` feature（宏默认可用），Cargo.toml 里写 `features=["derive"]` 会解析失败。
+7. **后台调试**：Wayland 下 wmctrl/xdotool 看不到窗口；截图用 `spectacle -b -n -f` 全屏 + convert 裁剪；后台进程用 run_in_background 或 setsid，别混管道。
+8. **验证 UI 用视觉**：启动 GUI 后 spectacle 截图读图确认，比只看日志可靠。
+
+## 7. 构建 / 运行 / 调试
+
+```bash
+cd /home/guts/Projects/AsusTuner
+cargo build --release          # 全量构建（GUI ~1.5min）
+./run.sh                       # 构建+启动 GUI
+cargo test                     # 单测（gui fan_curves 2 个）
+# CLI 直测（asusd 功能免 root）：
+target/release/asustuner-cli profile                 # 读档位
+target/release/asustuner-cli set-profile performance # 写档位（读回验证）
+target/release/asustuner-cli sensors                 # 监控
+target/release/asustuner-cli fan-get 0               # 读风扇曲线
+target/release/asustuner-cli fan-set --temp "56,61,66,71,76,80,85,97" --pwm "0,3,23,51,56,120,180,229"
+# gdbus 直调 asusd（调试利器）：
+gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
+  --method org.freedesktop.DBus.Properties.Get xyz.ljones.Platform PlatformProfile
+# GUI 调试：RUST_LOG 无效（Qt app），用 spectacle 截图 + eprintln
+```
+
+## 8. 已知问题与限制
+
+- **ryzenadj 类操作（功率墙/降压/boost/键盘灯）需 root**——这是当前最大功能缺口 → §9 方案解决。
+- GUI 风扇曲线 UI 目前 CPU/GPU 共用一套预设；GPU 单独曲线字段已留（setFanCurve 支持空 GPU 参数只设 CPU）。
+- 风扇曲线"当前曲线摘要"在窗口过矮时被裁剪（窗口高 840 已缓解）。
+- supergfxd 本机未启用，GPU 模式切换未接。
+- nvml（dGPU 温度/功耗）未接。
+
+## 9. 下一步计划
+
+**已完成（2026-08-29 本轮）**：
+- ✅ asustuner-backend（JSON stdio：ping/ryzenadj/exec/boost/kbd/exit；协议自测通过）
+- ✅ GUI 启动自动 pkexec 拉起后端（polkit 原生密码框；`ASUSTUNER_NO_AUTH=1` 跳过供开发）
+- ✅ G-Helper 风格 UI：头部（状态灯=点击授权 + 日志面板开关）+ 模式栏（当前档位高亮）+ 四页签 + 底部实时状态条
+- ✅ 可折叠后端日志/终端面板（stdout◀/stderr•/命令▶ + root 命令输入行）
+- ✅ 风扇页改为 Canvas 可拖拽曲线编辑器（8 点、40-100°C×0-255、邻居钳位单调、预设、CPU/GPU 切换）
+
+**2026-08-29 三轮（用户反馈修复）**：
+- ✅ 风扇编辑器改**双曲线同图**（CPU 蓝/GPU 绿，16 点就近抓取拖拽，图例；CurveEditor 持 cpuPoints+gpuPoints 双数组）
+- ✅ 日志面板开关时窗口高度自适应 ±210（修复默认尺寸下面板显示不全）；默认窗口 780x680
+- ✅ 监控页 + 底部状态条加 **CPU 瞬时功率**：后端新增 `rapl` 命令读 `/sys/class/powercap/intel-rapl:0/energy_uj`（root-only），GUI 差分算瓦数（回绕用 max_energy_range_uj 修正，compute_cpu_power 有单测）；未授权显示"—/需授权后端"
+
+**2026-08-30 四轮（用户反馈修复）**：
+- ✅ 布局根治：四页全部 Flickable 包裹 + StackLayout `Layout.minimumHeight: 0`——内容在页内滚动，状态条/日志面板不再被挤出窗口（默认 680 高即可见状态条）
+- ✅ 键盘灯效 (Aura)：性能页新组——效果(静态/呼吸/闪烁/彩虹)+速度(慢/中/快)+9 色色块(选中描边)+亮度+应用。走 root 后端 `aura` 命令写 `kbd_rgb_mode` 六字节 `[1,mode,r,g,b,speed]`（字节格式与 asusd `aura_laptop/mod.rs write_effect_and_apply` 一致；Speed 枚举 0xe1/0xeb/0xf5 来自 rog-aura builtin_modes.rs；sysfs 写入格式为空格分隔十进制）。亮度走既有 `kbd` 命令。彩虹模式通常忽略颜色。v2 可选：切 asusd `xyz.ljones.Aura` D-Bus（需复刻 AuraEffect 嵌套类型）
+- ✅ 风扇预设 CPU/GPU 分开（两套表，GPU 低温区略缓）
+- ✅ CPU 功率实测生效（用户截图状态条显示 25W/24W，RAPL 链路工作）
+
+**待办（优先级序）**：
+1. 用户实测 Aura 灯效真实效果（授权后键盘变色）
+2. GPU 模式页（supergfxctl，本机未启用 supergfxd）
+3. nvml 监控（dGPU 温度/功耗）
+4. 安装脚本：装 /usr/bin 三件套 + .desktop + 图标
+5. 监控页历史曲线图（Canvas 折线）
+
+## 10. 交接注意
+
+- 改 bridge 后必须 `cargo build -p asustuner-gui` 验证（cxx-qt 宏报错信息晦涩，报 token 错通常指 bridge 文件第一行，真凶在内容语法）。
+- 修改 QML 后必须重新编译（qml 打进 qrc）。
+- 测试写操作后把系统状态恢复（如档位切回 quiet）。
+- asusd 是系统服务，别动它的配置；我们只是客户端。
+- 本文档随大改动更新；小改动更新 §4 状态表即可。
