@@ -130,6 +130,39 @@ fn ryzenadj(args: Vec<String>) -> (bool, String) {
     run_cmd("/usr/sbin/ryzenadj", &args)
 }
 
+/// 功率墙写入：优先 asus-armoury 固件接口（mW→W 整数，实测可写、与档位解耦、
+/// 不跨重启持久——依赖启动重放）；无 armoury 的机型回退 ryzenadj（mW 直写）。
+/// 映射：stapm→PL1 / fast→PL3(FPPT) / slow→PL2(SPPT)。
+fn write_power(stapm: u32, fast: u32, slow: u32) -> (bool, String) {
+    let base = "/sys/class/firmware-attributes/asus-armoury/attributes";
+    let pl1 = format!("{base}/ppt_pl1_spl/current_value");
+    if !std::path::Path::new(&pl1).exists() {
+        return ryzenadj(vec![
+            format!("--stapm-limit={stapm}"),
+            format!("--fast-limit={fast}"),
+            format!("--slow-limit={slow}"),
+        ]);
+    }
+    let (s, f, sl) = (stapm / 1000, fast / 1000, slow / 1000);
+    let mut errs: Vec<String> = Vec::new();
+    for (path, v, name) in [
+        (format!("{base}/ppt_pl1_spl/current_value"), s, "PL1"),
+        (format!("{base}/ppt_pl3_fppt/current_value"), f, "PL3"),
+        (format!("{base}/ppt_pl2_sppt/current_value"), sl, "PL2"),
+    ] {
+        if let Err(e) = std::fs::write(&path, v.to_string()) {
+            errs.push(format!("{name}: {e}"));
+        }
+        // 固件写入间隔（WMI/attr 异步生效）
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    if errs.is_empty() {
+        (true, format!("armoury: PL1={s}W PL3={f}W PL2={sl}W"))
+    } else {
+        (false, errs.join("; "))
+    }
+}
+
 fn platform_proxy() -> anyhow::Result<zbus::blocking::Proxy<'static>> {
     let conn = zbus::blocking::Connection::system()?;
     Ok(zbus::blocking::Proxy::new_owned(
@@ -247,17 +280,11 @@ fn apply_state() {
         log(&format!("boost={on}: {}", r.0));
     }
     if st.stapm.is_some() || st.fast.is_some() || st.slow.is_some() {
-        let mut args = Vec::new();
-        if let Some(v) = st.stapm {
-            args.push(format!("--stapm-limit={v}"));
-        }
-        if let Some(v) = st.fast {
-            args.push(format!("--fast-limit={v}"));
-        }
-        if let Some(v) = st.slow {
-            args.push(format!("--slow-limit={v}"));
-        }
-        let (ok, out) = ryzenadj(args);
+        let (ok, out) = write_power(
+            st.stapm.unwrap_or(0),
+            st.fast.unwrap_or(0),
+            st.slow.unwrap_or(0),
+        );
         log(&format!("功率墙: {ok} {out}"));
     }
     if st.coall.is_some() || st.cogfx.is_some() {
@@ -396,11 +423,7 @@ fn handle(v: Value) -> Value {
         }
         "set_power" => {
             let (a, b, c) = (g32("stapm"), g32("fast"), g32("slow"));
-            let (ok, out) = ryzenadj(vec![
-                format!("--stapm-limit={a}"),
-                format!("--fast-limit={b}"),
-                format!("--slow-limit={c}"),
-            ]);
+            let (ok, out) = write_power(a, b, c);
             if ok {
                 let mut st = STATE.lock().unwrap();
                 st.stapm = Some(a);
