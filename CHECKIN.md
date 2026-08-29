@@ -164,11 +164,19 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 - ✅ install.sh：sudo 一次部署（4 二进制 + systemd 服务 enable --now + 托盘 /etc/xdg/autostart）
 - 开发调试：ASUSTUNER_SOCKET / ASUSTUNER_STATE 环境变量可覆盖路径
 
+**2026-08-30 七轮（上游调研裁决 + armoury 落地，Q1-Q6 已裁决）**：
+- 调研输入：RESEARCH.md（上游项目调研，含关键自我修正——"事件驱动持久化更优雅"被推翻：ppd 直写 sysfs 可能绕过 asusd 事件链路）
+- ✅ 混合持久化落地（Q3→方案③）：backend `verify_loop()` 每 45s（ASUSTUNER_VERIFY_SECS 可覆盖）比对档位漂移才写回，补齐事件驱动不可靠的兜底腿；**单例守护**（main 入口 socket 探测，双实例会互相夺回打架——实测发现并修复）；RGB 重放 150ms 间隔（调研 C 项 z-helper 经验）
+- ✅ 功率墙接 armoury 读回（Q1 读半场）：sysfs 0644 世界可读免 root，GUI 三滑条 PL1/PL2/PL3 瓦特+固件范围(30-135W 步进1)，实测初始值对齐 100/115/135W；不可用机型回退旧 mW SpinBox；**写路径仍 ryzenadj，迁移等写入实验**
+- ✅ 实验脚本 scripts/armoury-experiment.sh（sudo 跑）：T1 同值通道/T2 +5W+ryzenadj 交叉对读/T3 档位联动（EnablePptGroup 暗示 ppt 可能挂档位下）；尾部含 D-Bus 免根写入试探（gdbus Set AsusArmoury CurrentValue）与重启持久化检查指引
+- 裁决记录：Q2 dGPU 纳入路线图(依赖实验)/Q4 托盘已落地不再裁决/Q5 电池健康页排期/Q6 定位=「G-Helper 体验+asusd 缺口」不做 rog-control-center 替代品，GPU 模式优先 armoury gpu_mux_mode/dgpu_disable（接口已实测存在）而非 supergfxd
+
 **待办（优先级序）**：
-1. 用户 `sudo ./install.sh` 真实部署 + 实测：睡眠唤醒恢复、ppd 切档夺回、托盘菜单手感
-2. GUI 拆"紧凑模式"（托盘双击=小面板）可选
-3. GPU 模式页（supergfxctl）/ nvml 监控 / 监控页历史曲线图
-4. ksni 菜单_radio 状态当前为轮询(3s gdbus)，可改信号驱动
+1. **等用户跑实验脚本** → 裁决功率墙写入迁移（armoury vs ryzenadj）+ 持久化设计简化
+2. 用户 `sudo ./install.sh` 真实部署实测（睡眠恢复/ppd 夺回/托盘）
+3. dGPU 控制（nv_temp_target/nv_dynamic_boost/nv_tgp，依赖实验）
+4. GPU 模式页（armoury gpu_mux_mode/dgpu_disable）/ 电池健康页 / 监控历史曲线
+5. ppd 事件链路实测（asusd 有 watch_platform_profile 痕迹，事件未必收不到——但不影响混合方案）
 
 ## 10. 交接注意
 
