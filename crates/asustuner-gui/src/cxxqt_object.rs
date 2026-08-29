@@ -1,6 +1,6 @@
 // cxx-qt 桥接 QObject —— 连接 QML 前端与 asusd + ryzenadj(经 root 后端)。
 // - asusd 直连（普通用户可读写，已验证）
-// - ryzenadj/boost/键盘灯 走 root 后端（pkexec 启动，JSON 行协议 over stdio）
+// - 全部写操作走常驻 root 后端（Unix socket JSON 行协议；未部署时 pkexec 兜底拉起）
 
 #[cxx_qt::bridge]
 pub mod qobject {
@@ -115,6 +115,7 @@ pub mod qobject {
 }
 
 use std::io::BufRead;
+use std::os::unix::net::UnixStream;
 use std::pin::Pin;
 use std::sync::{LazyLock, Mutex};
 
@@ -129,9 +130,12 @@ const PLATFORM_IFACE: &str = "xyz.ljones.Platform";
 static ASUSD: LazyLock<Mutex<Option<zbus::blocking::Proxy<'static>>>> =
     LazyLock::new(|| Mutex::new(None));
 
-/// root 后端子进程（pkexec 拉起）。
-static BACKEND_CHILD: LazyLock<Mutex<Option<std::process::Child>>> =
+/// root 后端 socket 连接。
+static BACKEND_SOCK: LazyLock<Mutex<Option<std::os::unix::net::UnixStream>>> =
     LazyLock::new(|| Mutex::new(None));
+
+/// 连接状态。
+static BACKEND_CONNECTED: LazyLock<Mutex<bool>> = LazyLock::new(|| Mutex::new(false));
 
 /// 后端日志环形缓冲（GUI 定时 drain）。
 static BACKEND_LOG: LazyLock<Mutex<std::collections::VecDeque<String>>> =
@@ -221,123 +225,7 @@ fn profile_name(v: u32) -> &'static str {
     }
 }
 
-// ---------- root 后端 ----------
-
-fn log_line(s: String) {
-    let mut q = BACKEND_LOG.lock().unwrap();
-    if q.len() > 800 {
-        q.drain(..400);
-    }
-    q.push_back(s);
-}
-
-fn backend_bin_path() -> Option<std::path::PathBuf> {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let p = dir.join("asustuner-backend");
-            if p.exists() {
-                return Some(p);
-            }
-        }
-    }
-    let p = std::path::PathBuf::from("/usr/bin/asustuner-backend");
-    if p.exists() {
-        return Some(p);
-    }
-    None
-}
-
-fn backend_alive() -> bool {
-    let mut guard = BACKEND_CHILD.lock().unwrap();
-    match guard.as_mut() {
-        Some(c) => matches!(c.try_wait(), Ok(None)),
-        None => false,
-    }
-}
-
-/// 经 pkexec 启动后端（弹出系统 polkit 密码对话框）。
-fn spawn_backend() -> bool {
-    if backend_alive() {
-        return true;
-    }
-    let bin = match backend_bin_path() {
-        Some(b) => b,
-        None => {
-            log_line("✗ 未找到 asustuner-backend 二进制".to_string());
-            return false;
-        }
-    };
-    if std::env::var("ASUSTUNER_NO_AUTH").as_deref() == Ok("1") {
-        log_line("⚠ ASUSTUNER_NO_AUTH=1：跳过后端授权（功率墙/降压/boost/键盘灯不可用）".to_string());
-        return false;
-    }
-    log_line("正在请求管理员权限（polkit 授权框）…".to_string());
-    let attempt = std::process::Command::new("pkexec")
-        .arg(&bin)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn();
-    match attempt {
-        Ok(mut child) => {
-            if let Some(out) = child.stdout.take() {
-                std::thread::spawn(move || {
-                    let reader = std::io::BufReader::new(out);
-                    for line in reader.lines().flatten() {
-                        // JSON 应答入队供逻辑消费；同时也进日志面板
-                        match serde_json::from_str::<serde_json::Value>(&line) {
-                            Ok(v) => {
-                                PENDING_REPLIES.lock().unwrap().push_back(v);
-                                log_line(format!("◀ {line}"));
-                            }
-                            Err(_) => log_line(format!("◀ {line}")),
-                        }
-                    }
-                });
-            }
-            if let Some(err) = child.stderr.take() {
-                std::thread::spawn(move || {
-                    let reader = std::io::BufReader::new(err);
-                    for line in reader.lines().flatten() {
-                        log_line(format!("• {line}"));
-                    }
-                });
-            }
-            *BACKEND_CHILD.lock().unwrap() = Some(child);
-            log_line("✓ 后端进程已创建（等待/完成授权）".to_string());
-            true
-        }
-        Err(e) => {
-            log_line(format!("✗ 启动后端失败: {e}"));
-            false
-        }
-    }
-}
-
-fn backend_send(v: &serde_json::Value) -> bool {
-    let mut guard = BACKEND_CHILD.lock().unwrap();
-    if let Some(child) = guard.as_mut() {
-        if let Some(stdin) = child.stdin.as_mut() {
-            use std::io::Write;
-            let line = serde_json::to_string(v).unwrap_or_default();
-            let ok = stdin.write_all(format!("{line}\n").as_bytes()).is_ok()
-                && stdin.flush().is_ok();
-            if !ok {
-                log_line("✗ 后端管道写入失败".to_string());
-            }
-            return ok;
-        }
-    }
-    log_line("✗ 后端未运行（先点击右上角状态灯授权）".to_string());
-    false
-}
-
-fn backend_ryzenadj(args: Vec<String>) {
-    if !backend_alive() && !spawn_backend() {
-        return;
-    }
-    backend_send(&serde_json::json!({"cmd": "ryzenadj", "args": args}));
-}
+// ---------- root 后端（常驻，Unix socket） ----------
 
 /// RAPL 能量差分 → 瓦数。首次采样返回 -1（尚无前值）。
 fn compute_cpu_power(energy_uj: i64, range_uj: i64) -> f64 {
@@ -362,6 +250,131 @@ fn compute_cpu_power(energy_uj: i64, range_uj: i64) -> f64 {
             -1.0
         }
     }
+}
+
+
+fn log_line(s: String) {
+    let mut q = BACKEND_LOG.lock().unwrap();
+    if q.len() > 800 {
+        q.drain(..400);
+    }
+    q.push_back(s);
+}
+
+fn socket_path() -> String {
+    std::env::var("ASUSTUNER_SOCKET").unwrap_or_else(|_| "/run/asustuner-backend.sock".into())
+}
+
+fn backend_connected() -> bool {
+    *BACKEND_CONNECTED.lock().unwrap()
+}
+
+/// 尝试连接后端 socket；成功则启动读取线程。
+fn try_connect_backend() -> bool {
+    let stream = match UnixStream::connect(socket_path()) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let reader = match stream.try_clone() {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    *BACKEND_SOCK.lock().unwrap() = Some(stream);
+    *BACKEND_CONNECTED.lock().unwrap() = true;
+    std::thread::spawn(move || {
+        let reader = std::io::BufReader::new(reader);
+        for line in reader.lines().flatten() {
+            match serde_json::from_str::<serde_json::Value>(&line) {
+                Ok(v) => {
+                    PENDING_REPLIES.lock().unwrap().push_back(v);
+                    log_line(format!("◀ {line}"));
+                }
+                Err(_) => log_line(format!("◀ {line}")),
+            }
+        }
+        // 连接断开
+        *BACKEND_SOCK.lock().unwrap() = None;
+        *BACKEND_CONNECTED.lock().unwrap() = false;
+        log_line("✗ 后端连接断开".to_string());
+    });
+    true
+}
+
+/// 确保后端可用：已连/能连/经 pkexec 拉起后重试。
+fn ensure_backend() -> bool {
+    if backend_connected() {
+        return true;
+    }
+    if try_connect_backend() {
+        return true;
+    }
+    // 常驻服务未跑：经 pkexec 拉起一份（绑定 socket 后退出重试连接）
+    if std::env::var("ASUSTUNER_NO_AUTH").as_deref() != Ok("1") {
+        let bin = backend_bin_path();
+        if let Some(bin) = bin {
+            log_line("正在请求管理员权限启动后端（polkit）…".to_string());
+            let _ = std::process::Command::new("pkexec")
+                .arg(&bin)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            for _ in 0..20 {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                if try_connect_backend() {
+                    log_line("✓ 后端已连接".to_string());
+                    return true;
+                }
+            }
+        } else {
+            log_line("✗ 未找到 asustuner-backend 二进制".to_string());
+        }
+    } else {
+        log_line("⚠ ASUSTUNER_NO_AUTH=1：跳过后端（功率/降压/灯效不可用）".to_string());
+    }
+    false
+}
+
+fn backend_bin_path() -> Option<std::path::PathBuf> {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let p = dir.join("asustuner-backend");
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    let p = std::path::PathBuf::from("/usr/bin/asustuner-backend");
+    if p.exists() {
+        return Some(p);
+    }
+    None
+}
+
+fn backend_send(v: &serde_json::Value) -> bool {
+    let mut guard = BACKEND_SOCK.lock().unwrap();
+    if let Some(sock) = guard.as_mut() {
+        use std::io::Write;
+        let line = serde_json::to_string(v).unwrap_or_default();
+        let ok = sock.write_all(format!("{line}\n").as_bytes()).is_ok()
+            && sock.flush().is_ok();
+        if !ok {
+            *BACKEND_CONNECTED.lock().unwrap() = false;
+            log_line("✗ 后端写入失败".to_string());
+        }
+        return ok;
+    }
+    log_line("✗ 后端未连接（点击右上角状态灯重试）".to_string());
+    false
+}
+
+fn backend_ryzenadj_persist(cmd: &str, mut payload: serde_json::Value) {
+    if !ensure_backend() {
+        return;
+    }
+    if let Some(o) = payload.as_object_mut() {
+        o.insert("cmd".into(), serde_json::Value::String(cmd.into()));
+    }
+    backend_send(&payload);
 }
 
 // ---------- 只读监控（免 root） ----------
@@ -537,7 +550,7 @@ impl qobject::AsusTunerObject {
         }
 
         // CPU 瞬时功率：经 root 后端读 RAPL 能量，差分计算（异步应答，下轮生效）
-        if backend_alive() {
+        if backend_connected() {
             backend_send(&serde_json::json!({"cmd": "rapl"}));
         }
         {
@@ -559,27 +572,18 @@ impl qobject::AsusTunerObject {
             }
         }
 
-        self.as_mut().set_backend_running(backend_alive());
+        self.as_mut().set_backend_running(backend_connected());
     }
 
     pub fn apply_profile(&self, profile: &QString) {
         let name: String = profile.into();
-        let val: u32 = match name.as_str() {
-            "performance" | "turbo" => 1,
-            "balanced" => 0,
-            "quiet" | "silent" => 2,
-            "lowpower" => 3,
-            _ => 0,
-        };
-        ensure_asusd();
         log_line(format!("▶ 档位 → {name}"));
-        let _ = with_asusd(|p| p.set_property::<u32>("PlatformProfile", val));
+        backend_send(&serde_json::json!({"cmd": "set_profile", "name": name}));
     }
 
     pub fn apply_charge_limit(&self, limit: u32) {
-        ensure_asusd();
         log_line(format!("▶ 充电限制 → {limit}%"));
-        let _ = with_asusd(|p| p.set_property::<u8>("ChargeControlEndThreshold", limit as u8));
+        backend_send(&serde_json::json!({"cmd": "set_charge", "limit": limit}));
     }
 
     pub fn set_cpu_curve(&self, all_cores: i32, igpu: i32) {
@@ -591,21 +595,17 @@ impl qobject::AsusTunerObject {
             args.push(format!("--set-cogfx={igpu}"));
         }
         log_line(format!("▶ 降压 coall={all_cores} cogfx={igpu}"));
-        backend_ryzenadj(args);
+        backend_ryzenadj_persist("set_curve", serde_json::json!({"all_cores": all_cores, "igpu": igpu}));
     }
 
     pub fn set_power_limits(&self, stapm: u32, fast: u32, slow: u32) {
         log_line(format!("▶ 功率墙 stapm={stapm} fast={fast} slow={slow}"));
-        backend_ryzenadj(vec![
-            format!("--stapm-limit={stapm}"),
-            format!("--fast-limit={fast}"),
-            format!("--slow-limit={slow}"),
-        ]);
+        backend_ryzenadj_persist("set_power", serde_json::json!({"stapm": stapm, "fast": fast, "slow": slow}));
     }
 
     pub fn set_temp_limit(&self, deg: u32) {
         log_line(format!("▶ 温度墙 {deg}°C"));
-        backend_ryzenadj(vec![format!("--tctl-temp={deg}")]);
+        backend_ryzenadj_persist("set_tctl", serde_json::json!({"deg": deg}));
     }
 
     pub fn set_boost(&self, on: bool) {
@@ -627,7 +627,7 @@ impl qobject::AsusTunerObject {
     }
 
     pub fn start_backend(&self) -> bool {
-        let ok = spawn_backend();
+        let ok = ensure_backend();
         if ok {
             backend_send(&serde_json::json!({"cmd": "ping"}));
         }
@@ -657,14 +657,6 @@ impl qobject::AsusTunerObject {
         gpu_temp: &QString,
         gpu_pwm: &QString,
     ) {
-        use crate::fan_curves::{write_fan_curve, CurveData, FanCurvePU};
-        let profile = match current_platform_profile() {
-            Ok(p) => p,
-            Err(_) => {
-                log_line("✗ 无法读当前档位（asusd）".to_string());
-                return;
-            }
-        };
         let t_cpu: String = cpu_temp.into();
         let p_cpu: String = cpu_pwm.into();
         let tmp = parse_arr8(&t_cpu);
@@ -673,39 +665,30 @@ impl qobject::AsusTunerObject {
             log_line("✗ CPU 曲线需 8 个点".to_string());
             return;
         }
+        if !ensure_backend() {
+            return;
+        }
         log_line("▶ 写入 CPU 风扇曲线".to_string());
-        let cpu = CurveData {
-            fan: FanCurvePU::CPU,
-            pwm: pwm.unwrap(),
-            temp: tmp.unwrap(),
-            enabled: true,
-        };
-        let _ = write_fan_curve(profile, cpu);
+        let cpu_arr: Vec<u32> = tmp.unwrap().iter().map(|&x| x as u32).collect();
+        let pwm_arr: Vec<u32> = pwm.unwrap().iter().map(|&x| x as u32).collect();
+        backend_send(&serde_json::json!({"cmd": "set_fan_curve", "fan": "cpu",
+            "temp": cpu_arr, "pwm": pwm_arr}));
         let t_gpu: String = gpu_temp.into();
         let p_gpu: String = gpu_pwm.into();
         let gt = parse_arr8(&t_gpu);
         let gp = parse_arr8(&p_gpu);
         if gt.is_some() && gp.is_some() {
             log_line("▶ 写入 GPU 风扇曲线".to_string());
-            let gpu = CurveData {
-                fan: FanCurvePU::GPU,
-                pwm: gp.unwrap(),
-                temp: gt.unwrap(),
-                enabled: true,
-            };
-            let _ = write_fan_curve(profile, gpu);
+            let gt_arr: Vec<u32> = gt.unwrap().iter().map(|&x| x as u32).collect();
+            let gp_arr: Vec<u32> = gp.unwrap().iter().map(|&x| x as u32).collect();
+            backend_send(&serde_json::json!({"cmd": "set_fan_curve", "fan": "gpu",
+                "temp": gt_arr, "pwm": gp_arr}));
         }
     }
 
     pub fn restore_fan_curves(&self) {
-        use crate::fan_curves::restore_defaults;
-        match current_platform_profile() {
-            Ok(profile) => {
-                log_line("▶ 恢复默认风扇曲线".to_string());
-                let _ = restore_defaults(profile);
-            }
-            Err(_) => log_line("✗ 无法读当前档位".to_string()),
-        }
+        log_line("▶ 恢复默认风扇曲线".to_string());
+        backend_send(&serde_json::json!({"cmd": "fan_defaults"}));
     }
 
     pub fn fan_curve_summary(&self) -> QString {

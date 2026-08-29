@@ -4,6 +4,7 @@ members = [
     "crates/asustuner-gui",
     "crates/asustuner-cli",
     "crates/asustuner-backend",
+    "crates/asustuner-tray",
 ]
 
 [workspace.package]

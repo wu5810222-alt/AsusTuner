@@ -3,11 +3,15 @@ name = "asustuner-backend"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "AsusTuner 特权后端（root，JSON 行协议 over stdio）"
+description = "AsusTuner 常驻 root 后端（socket JSON 协议 + 状态持久化 + 事件自愈）"
 
 [[bin]]
 name = "asustuner-backend"
 path = "src/main.rs"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+zbus = { version = "4", features = ["blocking"] }
+anyhow = "1"
+zvariant = "4"

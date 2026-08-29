@@ -157,12 +157,18 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 - ✅ 风扇预设 CPU/GPU 分开（两套表，GPU 低温区略缓）
 - ✅ CPU 功率实测生效（用户截图状态条显示 25W/24W，RAPL 链路工作）
 
+**2026-08-30 五轮（方案 B 三件套落地）**：
+- ✅ 后端常驻化：Unix socket（多客户端）+ 状态持久化(/var/lib/asustuner/state.json) + **启动自动恢复**（实测：启动日志"档位 quiet: true"）+ logind 唤醒重放 + asusd 档位锁定自愈（可 set_lock_profile 开关，默认开）
+- ✅ 轻托盘 asustuner-tray：ksni(SNI, blocking+async-io, 无Qt ~3MB)；右键=档位RadioGroup/风扇预设子菜单(独立CPU·GPU表)/恢复配置/打开主界面/退出；22x22 代码绘图标；**已在 KDE 面板实测显示**（D-Bus 注册 `org.kde.StatusNotifierItem-<pid>` 验证 + 截图）
+- ✅ GUI 改造：子管道→socket 客户端；全部写操作路由经后端（状态一致性）；未部署服务时 pkexec 兜底；托盘 GUI 路径解析 current_exe 兄弟目录
+- ✅ install.sh：sudo 一次部署（4 二进制 + systemd 服务 enable --now + 托盘 /etc/xdg/autostart）
+- 开发调试：ASUSTUNER_SOCKET / ASUSTUNER_STATE 环境变量可覆盖路径
+
 **待办（优先级序）**：
-1. 用户实测 Aura 灯效真实效果（授权后键盘变色）
-2. GPU 模式页（supergfxctl，本机未启用 supergfxd）
-3. nvml 监控（dGPU 温度/功耗）
-4. 安装脚本：装 /usr/bin 三件套 + .desktop + 图标
-5. 监控页历史曲线图（Canvas 折线）
+1. 用户 `sudo ./install.sh` 真实部署 + 实测：睡眠唤醒恢复、ppd 切档夺回、托盘菜单手感
+2. GUI 拆"紧凑模式"（托盘双击=小面板）可选
+3. GPU 模式页（supergfxctl）/ nvml 监控 / 监控页历史曲线图
+4. ksni 菜单_radio 状态当前为轮询(3s gdbus)，可改信号驱动
 
 ## 10. 交接注意
 

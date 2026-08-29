@@ -1,0 +1,15 @@
+[Unit]
+Description=AsusTuner root backend (hardware control, state persistence, event self-healing)
+Documentation=https://github.com/your-org/asustuner
+After=multi-user.target asusd.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/asustuner-backend
+Restart=on-failure
+RestartSec=3
+# 状态持久化目录
+StateDirectory=asustuner
+
+[Install]
+WantedBy=multi-user.target
