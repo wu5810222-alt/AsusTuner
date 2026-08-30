@@ -50,6 +50,8 @@ The only self-built component is a thin **privileged backend**: it does not talk
 - `asusd` (package `asusctl`) — **required on ASUS models** for profiles / charge limit / fan curves / lighting / GPU modes.
 - `ryzenadj` — **AMD CPUs only**, optional: Curve Optimizer undervolt, Tctl temp target, power-limit fallback.
 
+> ⚠️ **Tested only on the author's machine** (Arch + KDE Wayland, FA607PV). The Debian / Fedora / openSUSE package names and the desktop-environment notes further down are compiled from upstream docs, not verified on real machines — if anything is off, PRs are very welcome.
+
 ```bash
 # Arch / Arch-based
 sudo pacman -S --needed base-devel rust qt6-base qt6-declarative qt6-wayland asusctl
@@ -60,6 +62,7 @@ paru -S ryzenadj                    # or yay -S ryzenadj
 sudo apt install build-essential cargo qt6-base-dev qt6-declarative-dev qt6-wayland \
   qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
   qml6-module-qtquick-templates qml6-module-qtquick-window qml6-module-qtqml-workerscript
+# ^ package names not verified on real hardware (author only has an Arch machine) — PRs welcome
 # asusctl is not packaged for Debian/Ubuntu — build from source: https://asus-linux.org
 # ryzenadj (AMD only), no package — build:
 sudo apt install cmake libpci-dev
@@ -68,11 +71,11 @@ git clone https://github.com/FlyGoat/RyzenAdj && cd RyzenAdj \
 
 # Fedora
 sudo dnf install rust cargo gcc-c++ qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtwayland
-sudo dnf copr enable lukenukem/asus-linux && sudo dnf install asusctl
+sudo dnf copr enable lukenukem/asus-linux && sudo dnf install asusctl   # ^ COPR name unverified
 # ryzenadj (AMD only): sudo dnf install cmake libpci-devel, then build as above
 
 # openSUSE
-sudo zypper install rust cargo gcc-c++ qt6-base-devel qt6-declarative-devel qt6-wayland
+sudo zypper install rust cargo gcc-c++ qt6-base-devel qt6-declarative-devel qt6-wayland   # ^ unverified
 # asusctl: OBS repo (see asus-linux.org); ryzenadj: build from source as above
 ```
 

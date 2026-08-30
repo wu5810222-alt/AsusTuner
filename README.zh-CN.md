@@ -61,6 +61,8 @@ AsusTuner/
 - `asusd`（软件包名 `asusctl`）——**ASUS 机型必装**：档位/充电限制/风扇曲线/灯效/GPU 模式全靠它。
 - `ryzenadj`——**仅 AMD CPU**，可选：CPU 降压、温度墙、功率墙回退路径。
 
+> ⚠️ **只在作者本机实测过**（Arch + KDE Wayland，FA607PV）。下面 Debian / Fedora / openSUSE 的包名以及桌面环境适配说明均整理自文档、未经实机验证——如有出入，欢迎 PR 修正。
+
 ```bash
 # Arch / Arch 系
 sudo pacman -S --needed base-devel rust qt6-base qt6-declarative qt6-wayland asusctl
@@ -71,6 +73,7 @@ paru -S ryzenadj                    # 或 yay -S ryzenadj
 sudo apt install build-essential cargo qt6-base-dev qt6-declarative-dev qt6-wayland \
   qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
   qml6-module-qtquick-templates qml6-module-qtquick-window qml6-module-qtqml-workerscript
+# ^ 包名未经实机验证（作者只有 Arch 机器）——欢迎 PR 修正
 # asusctl 没有官方 Debian 包——按 https://asus-linux.org 从源码编译
 # ryzenadj（仅 AMD）无包，源码编译：
 sudo apt install cmake libpci-dev
@@ -79,11 +82,11 @@ git clone https://github.com/FlyGoat/RyzenAdj && cd RyzenAdj \
 
 # Fedora
 sudo dnf install rust cargo gcc-c++ qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtwayland
-sudo dnf copr enable lukenukem/asus-linux && sudo dnf install asusctl
+sudo dnf copr enable lukenukem/asus-linux && sudo dnf install asusctl   # ^ COPR 名未经实机验证
 # ryzenadj（仅 AMD）：sudo dnf install cmake libpci-devel 后按上文源码编译
 
 # openSUSE
-sudo zypper install rust cargo gcc-c++ qt6-base-devel qt6-declarative-devel qt6-wayland
+sudo zypper install rust cargo gcc-c++ qt6-base-devel qt6-declarative-devel qt6-wayland   # ^ 未经实机验证
 # asusctl：OBS 源（见 asus-linux.org）；ryzenadj：源码编译同上
 ```
 
