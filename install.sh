@@ -20,6 +20,10 @@ cd "$(dirname "$0")"
 
 info "编译 release..."
 cargo build --release || die "编译失败"
+# sudo 构建会把 target 文件变 root 属主，导致用户侧后续构建失败——自动归还
+if [[ -n "${SUDO_USER:-}" ]]; then
+  chown -R "$SUDO_USER" target 2>/dev/null || true
+fi
 ok "编译完成"
 
 info "安装二进制到 /usr/bin"
