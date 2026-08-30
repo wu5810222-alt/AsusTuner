@@ -238,6 +238,14 @@ ApplicationWindow {
         onTriggered: tuner.refresh()
     }
 
+    // 曲线写后延迟读回：等后端两笔 asusd 写入完成再读，
+    // 否则读到的是写前旧曲线，连续应用会显得在两套曲线间来回跳
+    Timer {
+        id: curveReadbackTimer
+        interval: 600
+        onTriggered: fanCol.loadFromDevice()
+    }
+
     // ===== 方案管理对话框 =====
     Dialog {
         id: cfgDialog
@@ -992,15 +1000,15 @@ ApplicationWindow {
                                     tuner.setFanCurve(
                                         fanCol.toTempStr(fanCol.cpuPoints), fanCol.toPwmStr(fanCol.cpuPoints),
                                         fanCol.toTempStr(fanCol.gpuPoints), fanCol.toPwmStr(fanCol.gpuPoints))
-                                    // 应用后从设备读回（asusd 可能钳位），编辑器与图同步
-                                    fanCol.loadFromDevice()
+                                    // 写命令是异步的：延迟读回（asusd 可能钳位），编辑器与图同步
+                                    curveReadbackTimer.restart()
                                 }
                             }
                             Button {
                                 text: qsTr("恢复默认")
                                 onClicked: {
                                     tuner.restoreFanCurves()
-                                    fanCol.loadFromDevice()
+                                    curveReadbackTimer.restart()
                                 }
                             }
                         }
