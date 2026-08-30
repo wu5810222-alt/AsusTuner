@@ -5,6 +5,7 @@
 #   2. 安装 backend / tray / gui / cli 到 /usr/bin
 #   3. 启用 asustuner-backend.service（root 常驻：状态持久化 + 睡眠/档位事件自愈）
 #   4. 托盘加入桌面自启动
+#   5. 安装应用图标（hicolor）与 GUI 桌面入口
 #
 # 之后：托盘常驻（右键菜单），主窗口从托盘按需打开。
 
@@ -50,6 +51,7 @@ cat > /usr/share/applications/asustuner-tray.desktop <<'DESK'
 Type=Application
 Name=AsusTuner Tray
 Exec=/usr/bin/asustuner-tray
+Icon=asustuner
 X-GNOME-Autostart-enabled=true
 X-KDE-autostart-after=panel
 Terminal=false
@@ -62,6 +64,28 @@ install -m 644 /usr/share/applications/asustuner-tray.desktop /etc/xdg/autostart
 install -d /usr/lib/systemd/user
 install -m 644 systemd/asustuner-tray.service /usr/lib/systemd/user/asustuner-tray.service
 ok "托盘将在登录后自启（也可手动运行 asustuner-tray）"
+
+info "应用图标（hicolor）与 GUI 桌面入口"
+for s in 512 256 128 64 48 32 24 22 16; do
+  install -d "/usr/share/icons/hicolor/${s}x${s}/apps"
+  install -m 644 "assets/icons/hicolor/${s}x${s}/apps/asustuner.png" \
+                 "/usr/share/icons/hicolor/${s}x${s}/apps/asustuner.png"
+done
+# 缓存刷新失败不阻塞安装（KDE 不强依赖，GNOME 等按 mtime 也能查到新图标）
+gtk-update-icon-cache -qf /usr/share/icons/hicolor 2>/dev/null || true
+cat > /usr/share/applications/asustuner.desktop <<'DESK'
+[Desktop Entry]
+Type=Application
+Name=AsusTuner
+GenericName=ASUS Laptop Control Center
+Comment=风扇曲线 / 性能档位 / 功耗与 GPU 模式（asusd 前端）
+Exec=/usr/bin/asustuner-gui
+Icon=asustuner
+Terminal=false
+Categories=System;Settings;HardwareSettings;
+Keywords=asus;fan;power;performance;rog;tuf;
+DESK
+ok "启动器已就绪（应用菜单搜 AsusTuner）"
 
 echo
 info "兼容性检查（仅提示，不影响安装）"

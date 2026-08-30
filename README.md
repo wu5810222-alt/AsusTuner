@@ -90,7 +90,7 @@ cd AsusTuner
 sudo ./install.sh
 ```
 
-`install.sh` builds the release binaries, installs all four to `/usr/bin`, enables `asustuner-backend.service`, installs the tray's desktop autostart **and** a systemd user unit (`asustuner-tray.service`, installed but not enabled — for compositors without XDG autostart), and prints non-blocking warnings when it detects GNOME-without-appindicator, a missing `asusd` or a missing `ryzenadj`. Afterwards you get a tray icon in the panel; the main window opens from the tray.
+`install.sh` builds the release binaries, installs all four to `/usr/bin`, enables `asustuner-backend.service`, installs the tray's desktop autostart **and** a systemd user unit (`asustuner-tray.service`, installed but not enabled — for compositors without XDG autostart), installs the app icon into the hicolor theme **and** a GUI launcher entry (`asustuner.desktop`), and prints non-blocking warnings when it detects GNOME-without-appindicator, a missing `asusd` or a missing `ryzenadj`. Afterwards you get a tray icon in the panel; the main window opens from the tray.
 
 ## Desktop environment notes
 

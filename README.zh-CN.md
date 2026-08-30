@@ -101,7 +101,7 @@ cd AsusTuner
 sudo ./install.sh
 ```
 
-`install.sh` 会编译 release、把四个二进制装到 `/usr/bin`、启用 `asustuner-backend.service`、安装托盘桌面自启动 **和** systemd user 单元（`asustuner-tray.service`，只装不启——给没有 XDG autostart 的合成器用），并在检测到「GNOME 未装 appindicator 扩展 / 缺 asusd / 缺 ryzenadj」时给出非阻断提示。之后托盘常驻面板，主窗口从托盘按需打开。
+`install.sh` 会编译 release、把四个二进制装到 `/usr/bin`、启用 `asustuner-backend.service`、安装托盘桌面自启动 **和** systemd user 单元（`asustuner-tray.service`，只装不启——给没有 XDG autostart 的合成器用）、安装 hicolor 应用图标 **和** GUI 启动器入口（`asustuner.desktop`），并在检测到「GNOME 未装 appindicator 扩展 / 缺 asusd / 缺 ryzenadj」时给出非阻断提示。之后托盘常驻面板，主窗口从托盘按需打开。
 
 ## 桌面环境适配
 
