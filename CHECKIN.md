@@ -180,6 +180,8 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 行为级验证通过：功率墙写入链路（GUI→后端→armoury 固件）真实限住 CPU。
 **现象记录（UX 优化项，暂不修）**：安静模式 CPU 几乎不超 30W / 平衡精确锁 45W / 性能模式锁 85W。机制假设（只读探查证实一半）：asusd 三档 EPP 不同（Quiet=Power(4)/Balanced=BalancePower(3)/Performance=Performance(1)），PPT 是天花板非目标——静音档 EPP 压得不冲上限、性能档全力冲撞 FPPT(点 45W 预设时 PL3=65)+STAPM 平均窗时序（85W 峰值在平均窗收敛前），ppd 切换还会独立重设 EPP 放大差异。待办：性能档专项实验（T3 当时只测了 quiet↔balanced）+ 文档向用户说明"调功耗请用平衡档"。
 
+**2026-08-30 十二轮（降压 cogfx 修复，9800575）**：用户实测发现降压 ok:false 但 coall 实际生效——Dragon Range（7940HX）不支持 cogfx(iGPU 降压)，GUI 同时发 --set-coall/--set-cogfx，cogfx 失败拉低整命令退出码。修复：backend set_curve/apply_state 把 coall/cogfx 拆成独立 ryzenadj 调用（各报成败，cogfx 仅自身成功才入状态）；GUI 滑块只发 all_cores（后端 igpu 能力保留给其他 family）。另注：ryzenadj 打印 4294967291 = -5 的 u32 补码，SMU 按有符号解释，数值正确非 bug。
+
 **待办（优先级序）**：
 1. **用户执行**：`sudo chown -R guts:guts ~/Projects/AsusTuner/target && sudo ./install.sh`（重装新功能 + 构建修复生效）
 2. 性能档功耗行为专项实验（85W 现象：FPPT/STAPM 窗/ppd EPP 交互）
