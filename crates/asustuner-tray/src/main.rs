@@ -9,7 +9,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
-use ksni::menu::{MenuItem, RadioItem, StandardItem, SubMenu};
+use ksni::menu::{MenuItem, StandardItem, SubMenu};
 use serde_json::{json, Value};
 
 fn sock_path() -> String {
@@ -17,8 +17,18 @@ fn sock_path() -> String {
 }
 const GUI_NAMES: [&str; 2] = ["/usr/bin/asustuner-gui", "asustuner-gui"];
 
-/// 当前档位（0=平衡 1=性能 2=静音），后台线程轮询 asusd 更新。
+/// 当前档位（0=平衡 1=性能 2=静音），后台线程轮询 asusd 更新（用于 tooltip）。
 static PROFILE: AtomicU8 = AtomicU8::new(2);
+
+fn profile_label(v: u8) -> &'static str {
+    match v {
+        0 => "平衡",
+        1 => "性能",
+        2 => "静音",
+        3 => "低功耗",
+        _ => "未知",
+    }
+}
 
 fn log(msg: &str) {
     eprintln!("[tray] {msg}");
@@ -41,6 +51,51 @@ fn set_profile(name: &str) {
         log(&format!("档位 → {name}: {}", r["ok"]));
     } else {
         log("后端未运行（systemctl start asustuner-backend）");
+    }
+}
+
+fn cfg_apply(name: &str) {
+    if let Some(r) = sock_cmd(&json!({"cmd": "profile_apply", "name": name})) {
+        log(&format!("方案「{name}」: {}", r["ok"]));
+    } else {
+        log("后端未运行（systemctl start asustuner-backend）");
+    }
+}
+
+/// 配置方案菜单项：每次展开菜单时向后端要 profile_list（短连接，毫秒级）。
+/// 后端不可达时退回三平台档位直切。
+fn cfg_items() -> Vec<MenuItem<AsusTray>> {
+    let list = sock_cmd(&json!({"cmd": "profile_list"}))
+        .and_then(|r| r.get("profiles").and_then(|x| x.as_array()).cloned());
+    match list {
+        Some(profiles) if !profiles.is_empty() => profiles
+            .iter()
+            .map(|p| {
+                let name = p.get("name").and_then(|x| x.as_str()).unwrap_or("?").to_string();
+                let active = p.get("active").and_then(|x| x.as_bool()).unwrap_or(false);
+                let label = if active { format!("● {name}") } else { name.clone() };
+                MenuItem::Standard(StandardItem {
+                    label,
+                    activate: Box::new(move |_: &mut AsusTray| cfg_apply(&name)),
+                    ..Default::default()
+                })
+            })
+            .collect(),
+        _ => [
+            ("静音", "quiet"),
+            ("平衡", "balanced"),
+            ("性能", "performance"),
+        ]
+        .iter()
+        .map(|(label, name)| {
+            let name = name.to_string();
+            MenuItem::Standard(StandardItem {
+                label: label.to_string(),
+                activate: Box::new(move |_: &mut AsusTray| set_profile(&name)),
+                ..Default::default()
+            })
+        })
+        .collect(),
     }
 }
 
@@ -146,7 +201,7 @@ impl ksni::Tray for AsusTray {
     fn tool_tip(&self) -> ksni::ToolTip {
         ksni::ToolTip {
             title: "AsusTuner".into(),
-            description: "系统控制：右键菜单操作".into(),
+            description: format!("当前平台: {}", profile_label(PROFILE.load(Ordering::Relaxed))),
             ..Default::default()
         }
     }
@@ -156,14 +211,6 @@ impl ksni::Tray for AsusTray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        use ksni::menu::{RadioGroup, SubMenu};
-        let cur = PROFILE.load(Ordering::Relaxed);
-        // selected 索引：0=静音(2) 1=平衡(0) 2=性能(1)
-        let selected = match cur {
-            0 => 1,
-            1 => 2,
-            _ => 0,
-        };
         let fan_item = |label: &str, kind: &'static str| -> MenuItem<Self> {
             MenuItem::Standard(StandardItem {
                 label: label.into(),
@@ -171,59 +218,42 @@ impl ksni::Tray for AsusTray {
                 ..Default::default()
             })
         };
-        vec![
-            MenuItem::RadioGroup(RadioGroup {
-                selected,
-                select: std::boxed::Box::new(|_: &mut Self, idx: usize| {
-                    let (name, val) = match idx {
-                        0 => ("quiet", 2u8),
-                        1 => ("balanced", 0u8),
-                        _ => ("performance", 1u8),
-                    };
-                    set_profile(name);
-                    PROFILE.store(val, Ordering::Relaxed);
+        let mut items: Vec<MenuItem<Self>> = cfg_items();
+        items.push(MenuItem::Separator);
+        items.push(MenuItem::SubMenu(SubMenu {
+            label: "风扇曲线".into(),
+            submenu: vec![
+                fan_item("静音", "quiet"),
+                fan_item("均衡", "balanced"),
+                fan_item("激进", "aggressive"),
+                MenuItem::Standard(StandardItem {
+                    label: "恢复默认".into(),
+                    activate: std::boxed::Box::new(|_: &mut Self| fan_defaults()),
+                    ..Default::default()
                 }),
-                options: vec![
-                    RadioItem { label: "静音".into(), ..Default::default() },
-                    RadioItem { label: "平衡".into(), ..Default::default() },
-                    RadioItem { label: "性能".into(), ..Default::default() },
-                ],
-            }),
-            MenuItem::Separator,
-            MenuItem::SubMenu(SubMenu {
-                label: "风扇曲线".into(),
-                submenu: vec![
-                    fan_item("静音", "quiet"),
-                    fan_item("均衡", "balanced"),
-                    fan_item("激进", "aggressive"),
-                    MenuItem::Standard(StandardItem {
-                        label: "恢复默认".into(),
-                        activate: std::boxed::Box::new(|_: &mut Self| fan_defaults()),
-                        ..Default::default()
-                    }),
-                ],
-                ..Default::default()
-            }),
-            MenuItem::Separator,
-            MenuItem::Standard(StandardItem {
-                label: "恢复已保存配置".into(),
-                icon_name: "view-refresh".into(),
-                activate: std::boxed::Box::new(|_: &mut Self| restore_state()),
-                ..Default::default()
-            }),
-            MenuItem::Standard(StandardItem {
-                label: "打开主界面".into(),
-                icon_name: "preferences-desktop".into(),
-                activate: std::boxed::Box::new(|_: &mut Self| open_gui()),
-                ..Default::default()
-            }),
-            MenuItem::Separator,
-            MenuItem::Standard(StandardItem {
-                label: "退出托盘".into(),
-                activate: std::boxed::Box::new(|_: &mut Self| std::process::exit(0)),
-                ..Default::default()
-            }),
-        ]
+            ],
+            ..Default::default()
+        }));
+        items.push(MenuItem::Separator);
+        items.push(MenuItem::Standard(StandardItem {
+            label: "恢复已保存配置".into(),
+            icon_name: "view-refresh".into(),
+            activate: std::boxed::Box::new(|_: &mut Self| restore_state()),
+            ..Default::default()
+        }));
+        items.push(MenuItem::Standard(StandardItem {
+            label: "打开主界面".into(),
+            icon_name: "preferences-desktop".into(),
+            activate: std::boxed::Box::new(|_: &mut Self| open_gui()),
+            ..Default::default()
+        }));
+        items.push(MenuItem::Separator);
+        items.push(MenuItem::Standard(StandardItem {
+            label: "退出托盘".into(),
+            activate: std::boxed::Box::new(|_: &mut Self| std::process::exit(0)),
+            ..Default::default()
+        }));
+        items
     }
 
     fn activate(&mut self, _x: i32, _y: i32) {
