@@ -821,7 +821,7 @@ fn handle(v: Value) -> Value {
             json!({"ok": r.0, "out": r.1})
         }
         "fan_calibrate" => {
-            // 校准满转速：存当前曲线 → 全速 6s 采样峰值 → 恢复
+            // 校准满转速：切性能档 → 全速 12s 采样峰值（含爬升时间）→ 恢复
             use fan_curves::{write_fan_curve, CurveData, FanCurvePU};
             let run = || -> Result<(i64, i64), String> {
                 let conn = zbus::blocking::Connection::system().map_err(|e| e.to_string())?;
@@ -837,7 +837,7 @@ fn handle(v: Value) -> Value {
                         .map_err(|e| format!("切性能档失败: {e}"))?;
                     std::thread::sleep(std::time::Duration::from_millis(400));
                     let saved = proxy.fan_curve_data(1u32).map_err(|e| e.to_string())?;
-                    log("校准：风扇全速运转约 6 秒…");
+                    log("校准：风扇全速运转约 12 秒…");
                     let temps = [40u8, 50, 60, 70, 80, 90, 95, 100];
                     for fan in [FanCurvePU::CPU, FanCurvePU::GPU] {
                         write_fan_curve(
@@ -847,7 +847,8 @@ fn handle(v: Value) -> Value {
                         .map_err(|e| e.to_string())?;
                     }
                     let (mut m1, mut m2) = (0i64, 0i64);
-                    for _ in 0..15 {
+                    // 30×400ms：留足风扇从低转速爬升到满转速的时间，取全程峰值
+                    for _ in 0..30 {
                         std::thread::sleep(std::time::Duration::from_millis(400));
                         let (f1, f2) = hwmon_fan_rpms();
                         m1 = m1.max(f1);

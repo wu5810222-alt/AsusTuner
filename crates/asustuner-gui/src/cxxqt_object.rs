@@ -967,7 +967,7 @@ impl qobject::AsusTunerObject {
 
     /// 校准满转速：后端全速运转采样，结果经 drain 回填属性。
     pub fn calibrate_fans(&self) {
-        log_line("▶ 校准满转速（风扇将全速运转约 6 秒）…".to_string());
+        log_line("▶ 校准满转速（风扇将全速运转约 12 秒）…".to_string());
         if ensure_backend() {
             backend_send(&serde_json::json!({"cmd": "fan_calibrate"}));
         }
