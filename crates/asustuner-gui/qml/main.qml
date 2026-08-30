@@ -491,7 +491,8 @@ ApplicationWindow {
                                 }
                                 Button {
                                     text: qsTr("应用")
-                                    onClicked: tuner.setCpuCurve(uvSlider.value, uvSlider.value)
+                                    // 本机 (Dragon Range) 不支持 iGPU 降压，仅发全核
+                                    onClicked: tuner.setCpuCurve(uvSlider.value, 0)
                                 }
                             }
                             Label {

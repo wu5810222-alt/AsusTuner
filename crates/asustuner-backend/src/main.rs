@@ -287,20 +287,17 @@ fn apply_state() {
         );
         log(&format!("功率墙: {ok} {out}"));
     }
-    if st.coall.is_some() || st.cogfx.is_some() {
-        let mut args = Vec::new();
-        if let Some(v) = st.coall {
-            if v != 0 {
-                args.push(format!("--set-coall={v}"));
-            }
+    if let Some(v) = st.coall {
+        if v != 0 {
+            let (ok, out) = ryzenadj(vec![format!("--set-coall={v}")]);
+            log(&format!("降压 coall={v}: {ok} {out}"));
         }
-        if let Some(v) = st.cogfx {
-            if v != 0 {
-                args.push(format!("--set-cogfx={v}"));
-            }
+    }
+    if let Some(v) = st.cogfx {
+        if v != 0 {
+            let (ok, out) = ryzenadj(vec![format!("--set-cogfx={v}")]);
+            log(&format!("降压 cogfx={v}: {ok} {out}"));
         }
-        let (ok, out) = ryzenadj(args);
-        log(&format!("降压: {ok} {out}"));
     }
     if let Some(d) = st.tctl {
         let (ok, out) = ryzenadj(vec![format!("--tctl-temp={d}")]);
@@ -434,23 +431,45 @@ fn handle(v: Value) -> Value {
             json!({"ok": ok, "out": out})
         }
         "set_curve" => {
+            // 拆成独立调用：单项失败不掩盖另一项（如 Dragon Range 不支持 cogfx）
             let all = g64("all_cores") as i32;
             let igpu = g64("igpu") as i32;
-            let mut args = Vec::new();
+            if all == 0 && igpu == 0 {
+                return json!({"ok": false, "out": "无有效参数（0=不变更）"});
+            }
+            let mut ok_any = false;
+            let mut detail: Vec<String> = Vec::new();
             if all != 0 {
-                args.push(format!("--set-coall={all}"));
+                let (ok, out) = ryzenadj(vec![format!("--set-coall={all}")]);
+                if ok {
+                    ok_any = true;
+                    detail.push(format!("coall={all}: 成功"));
+                } else {
+                    detail.push(format!("coall={all}: 失败 {out}"));
+                }
             }
             if igpu != 0 {
-                args.push(format!("--set-cogfx={igpu}"));
+                let (ok, out) = ryzenadj(vec![format!("--set-cogfx={igpu}")]);
+                if ok {
+                    ok_any = true;
+                    detail.push(format!("cogfx={igpu}: 成功"));
+                } else {
+                    detail.push(format!("cogfx={igpu}: 不支持/失败 {out}"));
+                }
             }
-            let (ok, out) = ryzenadj(args);
-            if ok {
+            if ok_any {
                 let mut st = STATE.lock().unwrap();
-                st.coall = Some(all);
-                st.cogfx = Some(igpu);
+                if all != 0 {
+                    st.coall = Some(all);
+                }
+                // cogfx 仅在它自己成功时保存
+                if igpu != 0 && detail.iter().any(|d| d.contains("cogfx=") && d.contains("成功")) {
+                    st.cogfx = Some(igpu);
+                }
                 save_state(&st);
             }
-            json!({"ok": ok, "out": out})
+            // 至少一项生效即 ok=true；单项失败明细在 out
+            json!({"ok": ok_any, "out": detail.join(" | ")})
         }
         "set_tctl" => {
             let d = g32("deg");
