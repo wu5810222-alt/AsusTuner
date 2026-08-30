@@ -57,11 +57,28 @@ Categories=System;
 DESK
 mkdir -p /etc/xdg/autostart
 install -m 644 /usr/share/applications/asustuner-tray.desktop /etc/xdg/autostart/asustuner-tray.desktop
+# user 级单元备用：niri/hyprland 等无 XDG autostart 实现的合成器环境，
+# 用户手动 `systemctl --user enable --now asustuner-tray`（不默认启用，避免与 autostart 双开）
+install -d /usr/lib/systemd/user
+install -m 644 systemd/asustuner-tray.service /usr/lib/systemd/user/asustuner-tray.service
 ok "托盘将在登录后自启（也可手动运行 asustuner-tray）"
+
+echo
+info "兼容性检查（仅提示，不影响安装）"
+if command -v gnome-shell >/dev/null 2>&1; then
+  info "  GNOME 桌面：托盘(SNI)需扩展支持，请确认已装 gnome-shell-extension-appindicator"
+fi
+if ! systemctl list-unit-files 2>/dev/null | grep -q '^asusd\.service'; then
+  info "  ⚠ 未检测到 asusd：档位/充电/风扇曲线/灯效不可用（非华硕机器或未装 asusctl）"
+fi
+if [[ ! -x /usr/sbin/ryzenadj ]]; then
+  info "  ⚠ 未安装 ryzenadj：AMD 降压/温度墙不可用（Intel 机型属正常）"
+fi
 
 echo
 ok "安装完成。"
 echo "  托盘：登录后自动出现（右键菜单控制）"
 echo "  主界面：托盘菜单 → 打开主界面（按需启动，关闭即释放内存）"
 echo "  状态：systemctl status asustuner-backend / journalctl -u asustuner-backend -f"
+echo "  无 XDG autostart 的桌面（niri/hyprland 等）：systemctl --user enable --now asustuner-tray"
 echo "  卸载：systemctl disable --now asustuner-backend && rm /usr/bin/asustuner-*"

@@ -436,6 +436,9 @@ fn ensure_backend() -> bool {
                     return true;
                 }
             }
+            log_line("✗ 授权后仍连不上后端：会话可能没有 polkit 认证代理（niri/hyprland 等\
+                  精简合成器需自启一个，如 polkit-gnome-authentication-agent-1），\
+                  或授权被拒；可查 journalctl -u asustuner-backend".to_string());
         } else {
             log_line("✗ 未找到 asustuner-backend 二进制".to_string());
         }

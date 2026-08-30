@@ -281,6 +281,17 @@ impl ksni::Tray for AsusTray {
 }
 
 fn main() {
+    // 单实例锁：XDG autostart 与 systemd user unit 双路径并存时防双托盘
+    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+    let lock_path = format!("{dir}/asustuner-tray.lock");
+    let _lock = if UnixStream::connect(&lock_path).is_ok() {
+        eprintln!("[tray] 已有托盘实例在运行，本次退出");
+        std::process::exit(0);
+    } else {
+        let _ = std::fs::remove_file(&lock_path);
+        std::os::unix::net::UnixListener::bind(&lock_path).ok()
+    };
+
     // 后台轮询当前档位（asusd 直读，普通用户可读）
     std::thread::spawn(|| loop {
         let v = std::process::Command::new("gdbus")
