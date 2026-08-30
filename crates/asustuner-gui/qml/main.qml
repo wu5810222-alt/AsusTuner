@@ -58,6 +58,7 @@ ApplicationWindow {
         readonly property color gpuColor: "#27ae60"
         property int dragIndex: -1
         property int dragFan: -1      // 0=CPU 1=GPU -1=未选中
+        property Item lockTarget: null // 拖点时冻结的外层 Flickable（防拖点变成滚页面）
         readonly property int pad: 26
         signal dragged(bool isCpu, var newPoints)
         color: Qt.darker(palette.base, 1.03)
@@ -119,13 +120,15 @@ ApplicationWindow {
                 ctx.clearRect(0, 0, width, height)
                 ctx.strokeStyle = Qt.rgba(0.5, 0.5, 0.5, 0.35)
                 ctx.lineWidth = 1
-                for (var g = 0; g <= 4; g++) {
-                    var gy = ed.pad + g * (height - 2 * ed.pad) / 4
+                // 纵向网格：每 1000 RPM 一格并逐格标注（上限不是 1000 整数倍时末段不画线）
+                for (var r = 0; r <= ed.maxRpm; r += 1000) {
+                    var gy = ed.p2y(r / ed.maxRpm * 255)
                     ctx.beginPath()
                     ctx.moveTo(ed.pad, gy)
                     ctx.lineTo(width - ed.pad, gy)
                     ctx.stroke()
                 }
+                // 横向网格：每 10°C 一格
                 for (var gv = 0; gv <= 6; gv++) {
                     var gx = ed.pad + gv * (width - 2 * ed.pad) / 6
                     ctx.beginPath()
@@ -135,11 +138,14 @@ ApplicationWindow {
                 }
                 ctx.fillStyle = palette.mid
                 ctx.font = "10px sans-serif"
-                ctx.fillText(ed.maxRpm + "", 2, ed.pad + 4)
-                ctx.fillText(Math.round(ed.maxRpm / 2) + "", 2, ed.pad + (height - 2 * ed.pad) / 2)
-                ctx.fillText("0", 2, height - ed.pad)
-                ctx.fillText("40°", ed.pad, height - 8)
-                ctx.fillText("100°", width - ed.pad - 20, height - 8)
+                for (var rl = 0; rl <= ed.maxRpm; rl += 1000) {
+                    var ly = ed.p2y(rl / ed.maxRpm * 255)
+                    ctx.fillText(rl + "", 2, Math.min(height - ed.pad + 4, ly + 4))
+                }
+                for (var tl = 0; tl <= 6; tl++) {
+                    ctx.fillText((40 + tl * 10) + "°",
+                                 ed.pad + tl * (width - 2 * ed.pad) / 6 - 9, height - 8)
+                }
                 // GPU 先画（绿），CPU 后画（蓝）叠上层
                 ed.drawCurve(ctx, ed.gpuPoints, ed.gpuColor)
                 ed.drawCurve(ctx, ed.cpuPoints, ed.cpuColor)
@@ -159,7 +165,12 @@ ApplicationWindow {
         MouseArea {
             anchors.fill: parent
             cursorShape: ed.dragIndex >= 0 ? Qt.ClosedHandCursor : Qt.PointingHandCursor
-            onPressed: function(m) { ed.pickNearest(m.x, m.y) }
+            onPressed: function(m) {
+                // 只有真抓到曲线点才冻结外层滚动（空处按下仍可滚页面）
+                if (ed.pickNearest(m.x, m.y) && ed.lockTarget) {
+                    ed.lockTarget.interactive = false
+                }
+            }
             onPositionChanged: function(m) {
                 if (ed.dragIndex < 0 || ed.dragFan < 0) return
                 var src = ed.dragFan === 0 ? ed.cpuPoints : ed.gpuPoints
@@ -172,11 +183,15 @@ ApplicationWindow {
                 // 经信号写回源数组，由绑定流回——不打断绑定
                 ed.dragged(ed.dragFan === 0, pts)
             }
-            onReleased: function() {
-                ed.dragIndex = -1
-                ed.dragFan = -1
-                canvas.requestPaint()
-            }
+            onReleased: function() { ed.endDrag() }
+            onCanceled: function() { ed.endDrag() }
+        }
+        // 松手/取消：恢复外层滚动并清除拖拽态
+        function endDrag() {
+            if (ed.lockTarget) ed.lockTarget.interactive = true
+            ed.dragIndex = -1
+            ed.dragFan = -1
+            canvas.requestPaint()
         }
     }
 
@@ -389,7 +404,7 @@ ApplicationWindow {
             }
         }
 
-        // ===== 模式栏（配置方案动态渲染）=====
+        // ===== 模式栏（配置方案动态渲染；方案多时按钮区横向滚动，不撑破布局）=====
         RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: 12
@@ -397,29 +412,46 @@ ApplicationWindow {
             Layout.bottomMargin: 4
             spacing: 8
             Label { text: qsTr("配置方案"); color: palette.text; font.pixelSize: 13 }
-            Repeater {
-                model: root.cfgRows()
-                Button {
-                    Layout.preferredWidth: Math.min(132, Math.max(76, implicitWidth + 22))
-                    highlighted: modelData.active
-                    text: modelData.name
-                    ToolTip.visible: hovered
-                    ToolTip.text: modelData.active
-                        ? qsTr("方案生效中")
-                        : qsTr("应用方案（基座：%1）").arg(root.platformLabel(modelData.platform))
-                    onClicked: {
-                        tuner.cfgApply(modelData.name)
-                        cfgRespTimer.restart()
+            Item {
+                Layout.fillWidth: true
+                implicitHeight: Math.max(40, modeRow.implicitHeight)
+                Flickable {
+                    id: modeFlick
+                    anchors.fill: parent
+                    contentWidth: modeRow.implicitWidth
+                    contentHeight: height
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    RowLayout {
+                        id: modeRow
+                        height: modeFlick.height
+                        spacing: 8
+                        Repeater {
+                            model: root.cfgRows()
+                            Button {
+                                Layout.preferredWidth: Math.min(132, Math.max(76, implicitWidth + 22))
+                                highlighted: modelData.active
+                                text: modelData.name
+                                ToolTip.visible: hovered
+                                ToolTip.text: modelData.active
+                                    ? qsTr("方案生效中")
+                                    : qsTr("应用方案（基座：%1）").arg(root.platformLabel(modelData.platform))
+                                onClicked: {
+                                    tuner.cfgApply(modelData.name)
+                                    cfgRespTimer.restart()
+                                }
+                            }
+                        }
+                        Label {
+                            visible: tuner.cfg_list.length === 0
+                            text: qsTr("等待后端…")
+                            color: palette.mid
+                            font.pixelSize: 12
+                        }
                     }
+                    ScrollBar.horizontal: ScrollBar { }
                 }
             }
-            Label {
-                visible: tuner.cfg_list.length === 0
-                text: qsTr("等待后端…")
-                color: palette.mid
-                font.pixelSize: 12
-            }
-            Item { Layout.fillWidth: true }
             Label {
                 text: qsTr("当前: ") + root.activeLabel()
                 color: palette.mid
@@ -770,6 +802,7 @@ ApplicationWindow {
 
             // ---------- 风扇页 ----------
             Flickable {
+                id: fanFlick
                 contentHeight: fanCol.height
                 clip: true
                 ScrollBar.vertical: ScrollBar { }
@@ -896,7 +929,7 @@ ApplicationWindow {
                             Button {
                                 text: qsTr("校准满转速")
                                 ToolTip.visible: hovered
-                                ToolTip.text: qsTr("风扇将全速运转约 6 秒实测最大转速，结束自动恢复曲线")
+                                ToolTip.text: qsTr("风扇将全速运转约 12 秒实测最大转速，结束自动恢复曲线并填入")
                                 onClicked: tuner.calibrateFans()
                             }
                             Label { text: qsTr("满转速参考"); color: palette.text; font.pixelSize: 12 }
@@ -908,19 +941,21 @@ ApplicationWindow {
                             }
                             Connections {
                                 target: tuner
-                                function onFanCalibCpuChanged() {
-                                    if (tuner.fan_calib_cpu > 0) {
-                                        maxRpmBox.value = Math.max(
-                                            Math.round(tuner.fan_calib_cpu),
-                                            Math.round(tuner.fan_calib_gpu))
-                                    }
+                                // CPU/GPU 任一校准值回流都重填（取二者较大值）
+                                function onFanCalibCpuChanged() { calibFill() }
+                                function onFanCalibGpuChanged() { calibFill() }
+                                function calibFill() {
+                                    var m = Math.max(Math.round(tuner.fan_calib_cpu),
+                                                     Math.round(tuner.fan_calib_gpu))
+                                    if (m > 0) maxRpmBox.value = m
                                 }
                             }
                         }
                         CurveEditor {
                             id: editor
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 320
+                            Layout.preferredHeight: 360
+                            lockTarget: fanFlick
                             maxRpm: fanCol.maxRpm
                             cpuPoints: fanCol.cpuPoints
                             gpuPoints: fanCol.gpuPoints
