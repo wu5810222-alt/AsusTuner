@@ -204,6 +204,14 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 - **多 GUI**：托盘重复点击开出多个窗口。修复=GUI 启动绑 `$XDG_RUNTIME_DIR/asustuner-gui.lock` 单实例锁（可连接=已有实例即退出）+ 托盘锁探测防重。**重要教训：托盘 spawn GUI 后必须 wait 收割，否则留僵尸；僵尸同样会被 pgrep 匹配、骗过"已在运行"探测**（用户机实测 4 个 GUI 僵尸）——防重探测用锁 socket 不用 pgrep，托盘侧起线程 wait() 收割
 - **曲线来回跳**：应用两条曲线后立即读回 asusd，写命令是异步的，读到写前旧曲线，连续应用时编辑器在新旧两套曲线间翻转。修复=600ms 定时器延迟读回（应用/恢复默认均走 curveReadbackTimer）
 
+**2026-08-30 十七轮（兼容性 Tier1+3 + 平台抽象预留，commits 7560079/a2e7696/aa65613/6274a97）**：
+用户问兼容性→清点三层耦合（完整矩阵见 **COMPATIBILITY.md**）→裁决做 Tier1+3 且预留抽象。结论：ASUS+Intel 机型后端地基不变（asusd/armoury 与 CPU 平台无关），只有 CPU 层要适配；非 ASUS 是新工程（预留接缝）。
+- **backend caps.rs**（能力真相源）：asusd/armoury_ppt/asus_hwmon/kbd_led/amd_adj(ryzenadj∃∧AuthenticAMD)/rapl_dir/cpu·igpu 温度源，root 注入式探测 + 5 单测；`get_state` 带 caps JSON；coall/cogfx/tctl 非 AMD 跳过（apply 路径+set_curve/set_tctl/ryzenadj 直通门控）；`rapl` 用探测域（intel-rapl:0/amd-rapl:*/name==cpu）；boost 遍历 128→256
+- **gui/cli**：温度源探测 k10temp→coretemp、amdgpu→i915；`amd_adj` qproperty 控制 CPU 降压组/温度墙控件显隐（Intel 干净隐藏）
+- **桌面兼容**：tray 单实例锁（防 autostart+user unit 双开）；`systemd/asustuner-tray.service`（user 级，装而不启，niri/hyprland 用）；install.sh GNOME/asusd/ryzenadj 缺失提示；GUI pkexec 失败明确提示 polkit agent 缺失
+- **健壮性顺手**：gui fan_curves panic→Result；`ASUSTUNER_SOCK_MODE`（默认 0666 不变，多用户机可收紧）
+- 单测 10 个全过（backend caps 5 + gui 5）；本机 caps 全命中验证；README 双语版为用户维护（未提交的改动未动）
+
 **待办（优先级序）**：
 1. **用户执行**：`sudo ./install.sh` 重部署（backend/托盘/GUI 全部更新；install.sh 会 systemctl restart）
 2. 性能档功耗行为专项实验（85W 现象：FPPT/STAPM 窗/ppd EPP 交互）
