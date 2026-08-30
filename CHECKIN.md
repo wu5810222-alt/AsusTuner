@@ -20,23 +20,25 @@
 ```
 AsusTuner/
 ├── crates/
-│   ├── asustuner-gui/    # QML + cxx-qt (Qt6) 前端，直连 asusd D-Bus + 调 ryzenadj
-│   │   ├── src/main.rs           # Qt 入口
-│   │   ├── src/cxxqt_object.rs   # QObject 桥（属性/invokable）
-│   │   ├── src/fan_curves.rs     # asusd FanCurves 接口类型复刻 + zbus proxy
-│   │   └── qml/main.qml          # 界面
-│   ├── asustuner-cli/    # 命令行（直连 asusd + ryzenadj）
-│   │   ├── src/main.rs
-│   │   └── src/fan.rs            # FanCurves 类型 + 读写封装
-│   └── asustuner-backend/ # root 特权后端（JSON 行协议 over stdio，pkexec 启动）
-├── run.sh                # 一键构建+启动 GUI
-├── CHECKIN.md            # 本文件
-└── README.md
+│   ├── asustuner-backend/  # root 常驻后端（systemd）：Unix socket JSON 行协议、state.json 持久化、
+│   │                       #   开机/唤醒重放、45s 漂移校验、单例守护、自定义方案存储
+│   ├── asustuner-gui/      # QML + cxx-qt (Qt6) 主界面（五页签，写操作经后端 socket）
+│   │   ├── src/main.rs / src/cxxqt_object.rs / src/fan_curves.rs
+│   │   └── qml/main.qml
+│   ├── asustuner-tray/     # ksni 托盘（无 Qt）：方案切换/风扇预设/恢复配置/开 GUI
+│   └── asustuner-cli/      # 命令行（直连 asusd + ryzenadj）
+├── systemd/asustuner-backend.service
+├── install.sh              # sudo 一次部署（编译+装二进制+起服务+托盘自启）
+├── run.sh                  # 开发：编译+启动 GUI
+├── scripts/                # 实验脚本
+├── CHECKIN.md              # 本文件
+├── README.md               # 中文说明
+└── README_EN.md            # 英文说明（与中文保持同步）
 ```
 
-**数据流**：GUI/CLI → (D-Bus) asusd → 硬件；GUI/CLI → (subprocess) ryzenadj → SMU；GUI → (只读 sysfs) 传感器监控。
+**数据流**：GUI/托盘 → (Unix socket) backend → (root) asusd D-Bus / ryzenadj / armoury sysfs / RAPL / kbd sysfs；CLI → (D-Bus) asusd + (subprocess) ryzenadj；监控读只读 sysfs（RAPL 经后端）。
 
-**已删除**（历史上走过弯路，勿恢复）：asustuner-daemon（自研守护进程）、asustuner-shared（协议库）、自写 hardware/* sysfs 层、systemd/ 自建服务、config/ 档位文件。
+**已删除**（历史上走过弯路，勿恢复）：asustuner-daemon（第一版自研硬件层守护进程）、asustuner-shared（协议库）、自写 hardware/* sysfs 层、config/ 档位文件。注：现行 `systemd/asustuner-backend.service` 是方案 B 的薄特权后端服务（只代调 asusd/ryzenadj/armoury 接口，不自写硬件层），不属于弯路组件。
 
 ## 3. 硬件基线（本机实测）
 
@@ -195,6 +197,8 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 - 坐标轴：纵轴每 1000RPM 一格逐格标注（上限非 1000 整数倍时末段无线无标）、横轴每 10°C 逐格标注；编辑器 320→360 高
 - 校准 6s 测出 3900 偏低（用户称本机可达 7000）：采样 6s→12s（30×400ms 留足爬升时间取全程峰值）；回填改 CPU/GPU 双信号触发
 - 方案按钮过多撑破布局：模式栏按钮区改横向 Flickable 滚动 + ScrollBar
+
+**2026-08-30 十五轮（双语 README）**：新增 `README_EN.md`（英文版，面向 GitHub 国际开发者）；`README.md` 同步重写过时内容（原版停留在"无后端直连"早期架构——补齐四件套架构树/armoury 功率路径/自定义方案/GPU·电池健康·Aura 功能表/权限说明，顶部加中英互链）；§2 架构树同步修正（补 tray/systemd/install.sh，"已删除"清单不再含 systemd——现行 backend.service 属方案 B 正常组件）。**约定：commit message 今后用英文**（历史不重写）。
 
 **待办（优先级序）**：
 1. **用户执行**：`sudo ./install.sh` 重部署（backend/托盘/GUI 全部更新；install.sh 会 systemctl restart）
