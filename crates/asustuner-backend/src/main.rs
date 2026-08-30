@@ -23,6 +23,7 @@ use std::sync::{LazyLock, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+mod caps;
 mod fan_curves;
 
 // ---------- 状态 ----------
@@ -194,6 +195,9 @@ fn write_power(stapm: u32, fast: u32, slow: u32) -> (bool, String) {
     let base = "/sys/class/firmware-attributes/asus-armoury/attributes";
     let pl1 = format!("{base}/ppt_pl1_spl/current_value");
     if !std::path::Path::new(&pl1).exists() {
+        if !caps::get().amd_adj {
+            return (false, "无功率墙接口（armoury 缺失且非 AMD/ryzenadj）".into());
+        }
         return ryzenadj(vec![
             format!("--stapm-limit={stapm}"),
             format!("--fast-limit={fast}"),
@@ -327,7 +331,7 @@ fn apply_custom_profile(st: &mut State, name: &str) -> Vec<String> {
             write_sysfs(global, val)
         } else {
             let mut last = (false, String::new());
-            for i in 0..128 {
+            for i in 0..256 {
                 let p = format!("/sys/devices/system/cpu/cpu{i}/cpufreq/boost");
                 if std::path::Path::new(&p).exists() {
                     last = write_sysfs(&p, val);
@@ -353,31 +357,43 @@ fn apply_custom_profile(st: &mut State, name: &str) -> Vec<String> {
     }
     if let Some(v) = cp.coall {
         if v != 0 {
-            let (ok, out) = ryzenadj(vec![format!("--set-coall={v}")]);
-            log(&format!("降压 coall={v}: {ok} {out}"));
-            if !ok {
-                fails.push(format!("coall 降压: {out}"));
+            if !caps::get().amd_adj {
+                log("非 AMD（或 ryzenadj 缺失），跳过 coall 降压");
+            } else {
+                let (ok, out) = ryzenadj(vec![format!("--set-coall={v}")]);
+                log(&format!("降压 coall={v}: {ok} {out}"));
+                if !ok {
+                    fails.push(format!("coall 降压: {out}"));
+                }
+                st.coall = Some(v);
             }
-            st.coall = Some(v);
         }
     }
     if let Some(v) = cp.cogfx {
         if v != 0 {
-            let (ok, out) = ryzenadj(vec![format!("--set-cogfx={v}")]);
-            log(&format!("降压 cogfx={v}: {ok} {out}"));
-            if !ok {
-                fails.push(format!("cogfx 降压: {out}"));
+            if !caps::get().amd_adj {
+                log("非 AMD（或 ryzenadj 缺失），跳过 cogfx 降压");
+            } else {
+                let (ok, out) = ryzenadj(vec![format!("--set-cogfx={v}")]);
+                log(&format!("降压 cogfx={v}: {ok} {out}"));
+                if !ok {
+                    fails.push(format!("cogfx 降压: {out}"));
+                }
+                st.cogfx = Some(v);
             }
-            st.cogfx = Some(v);
         }
     }
     if let Some(d) = cp.tctl {
-        let (ok, out) = ryzenadj(vec![format!("--tctl-temp={d}")]);
-        log(&format!("温度墙 {d}: {ok} {out}"));
-        if !ok {
-            fails.push(format!("温度墙: {out}"));
+        if !caps::get().amd_adj {
+            log("非 AMD（或 ryzenadj 缺失），跳过温度墙");
+        } else {
+            let (ok, out) = ryzenadj(vec![format!("--tctl-temp={d}")]);
+            log(&format!("温度墙 {d}: {ok} {out}"));
+            if !ok {
+                fails.push(format!("温度墙: {out}"));
+            }
+            st.tctl = Some(d);
         }
-        st.tctl = Some(d);
     }
     if let (Some(t), Some(pw)) = (&cp.cpu_temp, &cp.cpu_pwm) {
         match asusd_set_fan("cpu", t, pw) {
@@ -451,7 +467,7 @@ fn apply_state() {
             write_sysfs(global, val)
         } else {
             let mut last = (false, String::from("未找到 boost"));
-            for i in 0..128 {
+            for i in 0..256 {
                 let p = format!("/sys/devices/system/cpu/cpu{i}/cpufreq/boost");
                 if std::path::Path::new(&p).exists() {
                     last = write_sysfs(&p, val);
@@ -469,19 +485,19 @@ fn apply_state() {
         );
         log(&format!("功率墙: {ok} {out}"));
     }
-    if let Some(v) = st.coall {
+    if let Some(v) = st.coall.filter(|_| caps::get().amd_adj) {
         if v != 0 {
             let (ok, out) = ryzenadj(vec![format!("--set-coall={v}")]);
             log(&format!("降压 coall={v}: {ok} {out}"));
         }
     }
-    if let Some(v) = st.cogfx {
+    if let Some(v) = st.cogfx.filter(|_| caps::get().amd_adj) {
         if v != 0 {
             let (ok, out) = ryzenadj(vec![format!("--set-cogfx={v}")]);
             log(&format!("降压 cogfx={v}: {ok} {out}"));
         }
     }
-    if let Some(d) = st.tctl {
+    if let Some(d) = st.tctl.filter(|_| caps::get().amd_adj) {
         let (ok, out) = ryzenadj(vec![format!("--tctl-temp={d}")]);
         log(&format!("温度墙 {d}: {ok} {out}"));
     }
@@ -541,7 +557,7 @@ fn handle(v: Value) -> Value {
         "ping" => json!({"ok": true, "msg": "pong"}),
         "get_state" => {
             let st = STATE.lock().unwrap().clone();
-            json!({"ok": true, "state": st})
+            json!({"ok": true, "state": st, "caps": caps::get()})
         }
         "restore" => {
             apply_state();
@@ -711,6 +727,9 @@ fn handle(v: Value) -> Value {
         }
         "set_curve" => {
             // 拆成独立调用：单项失败不掩盖另一项（如 Dragon Range 不支持 cogfx）
+            if !caps::get().amd_adj {
+                return json!({"ok": false, "out": "本机非 AMD 或 ryzenadj 缺失，降压不可用"});
+            }
             let all = g64("all_cores") as i32;
             let igpu = g64("igpu") as i32;
             if all == 0 && igpu == 0 {
@@ -751,6 +770,9 @@ fn handle(v: Value) -> Value {
             json!({"ok": ok_any, "out": detail.join(" | ")})
         }
         "set_tctl" => {
+            if !caps::get().amd_adj {
+                return json!({"ok": false, "out": "本机非 AMD 或 ryzenadj 缺失，温度墙不可用"});
+            }
             let d = g32("deg");
             let (ok, out) = ryzenadj(vec![format!("--tctl-temp={d}")]);
             if ok {
@@ -768,7 +790,7 @@ fn handle(v: Value) -> Value {
                 write_sysfs(global, val)
             } else {
                 let mut last = (false, String::from("未找到 boost"));
-                for i in 0..128 {
+                for i in 0..256 {
                     let p = format!("/sys/devices/system/cpu/cpu{i}/cpufreq/boost");
                     if std::path::Path::new(&p).exists() {
                         last = write_sysfs(&p, val);
@@ -899,6 +921,9 @@ fn handle(v: Value) -> Value {
 
         // 直通（不持久）
         "ryzenadj" => {
+            if !caps::get().amd_adj {
+                return json!({"ok": false, "out": "本机非 AMD 或 ryzenadj 缺失，直通不可用"});
+            }
             let args: Vec<String> = v
                 .get("args")
                 .and_then(|x| x.as_array())
@@ -920,8 +945,13 @@ fn handle(v: Value) -> Value {
                     .and_then(|s| s.trim().parse::<i64>().ok())
                     .unwrap_or(-1)
             };
-            let energy = read("/sys/class/powercap/intel-rapl:0/energy_uj");
-            let range = read("/sys/class/powercap/intel-rapl:0/max_energy_range_uj");
+            // 能量域目录由 caps 探测（intel-rapl:0 / amd-rapl:* / name=="cpu"）
+            let dir = caps::get()
+                .rapl_dir
+                .clone()
+                .unwrap_or_else(|| "intel-rapl:0".into());
+            let energy = read(&format!("/sys/class/powercap/{dir}/energy_uj"));
+            let range = read(&format!("/sys/class/powercap/{dir}/max_energy_range_uj"));
             json!({"ok": energy >= 0, "energy_uj": energy, "range_uj": range})
         }
         other => json!({"ok": false, "error": format!("未知命令: {other}")}),
