@@ -176,11 +176,15 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 落地：backend `write_power()` = armoury sysfs 三写（stapm→PL1/fast→PL3/slow→PL2，mW→W，150ms 固件间隔），`set_power`/`apply_state` 均改走它；无 armoury 机型回退 ryzenadj；**ryzenadj 保留**降压/温度墙/终端直通。功率墙**保留在启动重放名单**（不持久已证实）。行为级验证方法：功率墙设 45W → 跑压力 → 监控页 CPU 功率应压在 ~45W（RAPL 实测）。
 已知备选路径：asusd D-Bus 免根写 armoury（GUI/CLI 将来可不依赖后端写功率墙；CLI 免 sudo 路径候选）。
 
+**2026-08-30 九轮（行为级验证✓ + 各档位功耗现象记录 + 下一批开工）**：
+行为级验证通过：功率墙写入链路（GUI→后端→armoury 固件）真实限住 CPU。
+**现象记录（UX 优化项，暂不修）**：安静模式 CPU 几乎不超 30W / 平衡精确锁 45W / 性能模式锁 85W。机制假设（只读探查证实一半）：asusd 三档 EPP 不同（Quiet=Power(4)/Balanced=BalancePower(3)/Performance=Performance(1)），PPT 是天花板非目标——静音档 EPP 压得不冲上限、性能档全力冲撞 FPPT(点 45W 预设时 PL3=65)+STAPM 平均窗时序（85W 峰值在平均窗收敛前），ppd 切换还会独立重设 EPP 放大差异。待办：性能档专项实验（T3 当时只测了 quiet↔balanced）+ 文档向用户说明"调功耗请用平衡档"。
+
 **待办（优先级序）**：
-1. 用户 `sudo ./install.sh` 部署 + 行为级验证（45W 压测看 RAPL）+ 睡眠/ppd/托盘实测
-2. dGPU 控制（nv_temp_target/nv_dynamic_boost/nv_tgp——同走 armoury sysfs/D-Bus，模式照抄 write_power）
-3. GPU 模式页（armoury gpu_mux_mode/dgpu_disable）/ 电池健康页 / 监控历史曲线
-4. GUI 拆紧凑模式（托盘双击小面板）/ CLI power 免 sudo 化（D-Bus 路径）
+1. **本批开工：dGPU 控制 + GPU 模式页（armoury）+ 电池健康页**
+2. 性能档功耗行为专项实验（85W 现象：FPPT/STAPM 窗/ppd EPP 交互）
+3. 用户 `sudo ./install.sh` 部署实测（睡眠/ppd/托盘）
+4. GUI 拆紧凑模式 / CLI power 免 sudo 化（D-Bus 路径）/ 监控历史曲线
 
 ## 10. 交接注意
 
