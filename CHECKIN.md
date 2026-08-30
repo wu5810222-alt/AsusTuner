@@ -32,8 +32,8 @@ AsusTuner/
 ├── run.sh                  # 开发：编译+启动 GUI
 ├── scripts/                # 实验脚本
 ├── CHECKIN.md              # 本文件
-├── README.md               # 中文说明
-└── README_EN.md            # 英文说明（与中文保持同步）
+├── README.md               # 英文说明（默认：GitHub 仓库首页展示）
+└── README.zh-CN.md         # 中文说明（与英文保持同步）
 ```
 
 **数据流**：GUI/托盘 → (Unix socket) backend → (root) asusd D-Bus / ryzenadj / armoury sysfs / RAPL / kbd sysfs；CLI → (D-Bus) asusd + (subprocess) ryzenadj；监控读只读 sysfs（RAPL 经后端）。
@@ -198,7 +198,7 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 - 校准 6s 测出 3900 偏低（用户称本机可达 7000）：采样 6s→12s（30×400ms 留足爬升时间取全程峰值）；回填改 CPU/GPU 双信号触发
 - 方案按钮过多撑破布局：模式栏按钮区改横向 Flickable 滚动 + ScrollBar
 
-**2026-08-30 十五轮（双语 README）**：新增 `README_EN.md`（英文版，面向 GitHub 国际开发者）；`README.md` 同步重写过时内容（原版停留在"无后端直连"早期架构——补齐四件套架构树/armoury 功率路径/自定义方案/GPU·电池健康·Aura 功能表/权限说明，顶部加中英互链）；§2 架构树同步修正（补 tray/systemd/install.sh，"已删除"清单不再含 systemd——现行 backend.service 属方案 B 正常组件）。**约定：commit message 今后用英文**（历史不重写）。
+**2026-08-30 十五轮（双语 README）**：新增英文版 README（面向 GitHub 国际开发者）；中文版 README 同步重写过时内容（原版停留在"无后端直连"早期架构——补齐四件套架构树/armoury 功率路径/自定义方案/GPU·电池健康·Aura 功能表/权限说明）；§2 架构树同步修正（补 tray/systemd/install.sh，"已删除"清单不再含 systemd——现行 backend.service 属方案 B 正常组件）。**约定：commit message 今后用英文**（历史不重写）。命名布局：**英文版 = `README.md`**（GitHub 仓库首页默认展示），中文版 = `README.zh-CN.md`，顶部互链实现"切换"——GitHub 无内置语言切换机制，靠默认文件名 + 互链约定。
 
 **待办（优先级序）**：
 1. **用户执行**：`sudo ./install.sh` 重部署（backend/托盘/GUI 全部更新；install.sh 会 systemctl restart）
