@@ -9,6 +9,8 @@
 //
 // 协议（每行一条 JSON，应答同行返回）：
 //   通用: ping / get_state / restore / set_lock_profile{on} / exit
+//   方案: profile_save{name,platform,snapshot} profile_apply{name}
+//         profile_delete{name} profile_list
 //   设置(持久): set_profile{name} set_charge{limit} set_fan_curve{fan,temp,pwm}
 //               fan_defaults set_power{stapm,fast,slow} set_curve{all_cores,igpu}
 //               set_tctl{deg} boost{on} kbd{level} aura{mode,r,g,b,speed}
@@ -34,6 +36,30 @@ struct AuraState {
     speed: u8,
 }
 
+/// 用户自定义方案（G-Helper 式）：命名捆绑 电源管理方案+功耗+降压+风扇曲线 等。
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+struct CustomProfile {
+    name: String,
+    /// 电源管理方案：quiet/balanced/performance/lowpower
+    platform: String,
+    stapm: Option<u32>,
+    fast: Option<u32>,
+    slow: Option<u32>,
+    coall: Option<i32>,
+    cogfx: Option<i32>,
+    tctl: Option<u32>,
+    boost: Option<bool>,
+    cpu_temp: Option<Vec<u8>>,
+    cpu_pwm: Option<Vec<u8>>,
+    gpu_temp: Option<Vec<u8>>,
+    gpu_pwm: Option<Vec<u8>>,
+    charge_limit: Option<u8>,
+}
+
+/// 内置方案名（不可删除；同名保存 = 覆盖其捆绑内容）
+const BUILTIN: &[&str] = &["静音", "平衡", "性能"];
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
 struct State {
@@ -54,6 +80,8 @@ struct State {
     cpu_pwm: Option<Vec<u8>>,
     gpu_temp: Option<Vec<u8>>,
     gpu_pwm: Option<Vec<u8>>,
+    custom_profiles: Vec<CustomProfile>,
+    active_custom: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -61,6 +89,9 @@ fn default_true() -> bool {
 }
 
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(load_state()));
+
+/// 校准进行中标志：旁路档位 watcher/verify（校准会临时切性能平台）。
+static CALIBRATING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn state_path() -> String {
     std::env::var("ASUSTUNER_STATE").unwrap_or_else(|_| "/var/lib/asustuner/state.json".into())
@@ -223,7 +254,7 @@ fn asusd_set_charge(limit: u8) -> Result<(), String> {
 }
 
 fn asusd_set_fan(fan: &str, temp: &[u8], pwm: &[u8]) -> Result<(), String> {
-    use fan_curves::{write_fan_curve, CurveData, FanCurvePU};
+    use fan_curves::{CurveData, FanCurvePU};
     if temp.len() != 8 || pwm.len() != 8 {
         return Err("曲线需 8 个点".into());
     }
@@ -274,8 +305,133 @@ fn kbd_rgb_mode(mode: u8, r: u8, g: u8, b: u8, speed: u8) -> (bool, String) {
 
 // ---------- 状态应用 ----------
 
+/// 应用一个自定义方案：平台→boost→功率→降压→温度墙→风扇→充电。
+/// 返回失败明细（空 = 全部成功）。
+fn apply_custom_profile(st: &mut State, name: &str) -> Vec<String> {
+    let mut fails: Vec<String> = Vec::new();
+    let Some(cp) = st.custom_profiles.iter().find(|p| p.name == name).cloned() else {
+        log(&format!("自定义方案 {name} 不存在"));
+        return fails;
+    };
+    log(&format!("── 应用方案「{}」（平台 {}）──", cp.name, cp.platform));
+    if asusd_set_profile(&cp.platform).is_ok() {
+        st.profile = Some(cp.platform.clone());
+    } else {
+        log("平台设置失败（asusd 未就绪？）");
+        fails.push(format!("平台档位 {}", cp.platform));
+    }
+    if let Some(on) = cp.boost {
+        let val = if on { "1" } else { "0" };
+        let global = "/sys/devices/system/cpu/cpufreq/boost";
+        let r = if std::path::Path::new(global).exists() {
+            write_sysfs(global, val)
+        } else {
+            let mut last = (false, String::new());
+            for i in 0..128 {
+                let p = format!("/sys/devices/system/cpu/cpu{i}/cpufreq/boost");
+                if std::path::Path::new(&p).exists() {
+                    last = write_sysfs(&p, val);
+                }
+            }
+            last
+        };
+        log(&format!("boost={on}: {}", r.0));
+        if !r.0 {
+            fails.push("boost 开关".into());
+        }
+        st.boost = Some(on);
+    }
+    if cp.stapm.is_some() || cp.fast.is_some() || cp.slow.is_some() {
+        let (ok, out) = write_power(cp.stapm.unwrap_or(0), cp.fast.unwrap_or(0), cp.slow.unwrap_or(0));
+        log(&format!("功率墙: {ok} {out}"));
+        if !ok {
+            fails.push(format!("功率墙: {out}"));
+        }
+        st.stapm = cp.stapm;
+        st.fast = cp.fast;
+        st.slow = cp.slow;
+    }
+    if let Some(v) = cp.coall {
+        if v != 0 {
+            let (ok, out) = ryzenadj(vec![format!("--set-coall={v}")]);
+            log(&format!("降压 coall={v}: {ok} {out}"));
+            if !ok {
+                fails.push(format!("coall 降压: {out}"));
+            }
+            st.coall = Some(v);
+        }
+    }
+    if let Some(v) = cp.cogfx {
+        if v != 0 {
+            let (ok, out) = ryzenadj(vec![format!("--set-cogfx={v}")]);
+            log(&format!("降压 cogfx={v}: {ok} {out}"));
+            if !ok {
+                fails.push(format!("cogfx 降压: {out}"));
+            }
+            st.cogfx = Some(v);
+        }
+    }
+    if let Some(d) = cp.tctl {
+        let (ok, out) = ryzenadj(vec![format!("--tctl-temp={d}")]);
+        log(&format!("温度墙 {d}: {ok} {out}"));
+        if !ok {
+            fails.push(format!("温度墙: {out}"));
+        }
+        st.tctl = Some(d);
+    }
+    if let (Some(t), Some(pw)) = (&cp.cpu_temp, &cp.cpu_pwm) {
+        match asusd_set_fan("cpu", t, pw) {
+            Ok(_) => {
+                st.cpu_temp = cp.cpu_temp.clone();
+                st.cpu_pwm = cp.cpu_pwm.clone();
+            }
+            Err(e) => {
+                log(&format!("CPU 风扇曲线失败: {e}"));
+                fails.push(format!("CPU 风扇曲线: {e}"));
+            }
+        }
+    }
+    if let (Some(t), Some(pw)) = (&cp.gpu_temp, &cp.gpu_pwm) {
+        match asusd_set_fan("gpu", t, pw) {
+            Ok(_) => {
+                st.gpu_temp = cp.gpu_temp.clone();
+                st.gpu_pwm = cp.gpu_pwm.clone();
+            }
+            Err(e) => {
+                log(&format!("GPU 风扇曲线失败: {e}"));
+                fails.push(format!("GPU 风扇曲线: {e}"));
+            }
+        }
+    }
+    if let Some(c) = cp.charge_limit {
+        if asusd_set_charge(c).is_ok() {
+            st.charge_limit = Some(c);
+        } else {
+            fails.push(format!("充电限制 {c}"));
+        }
+    }
+    st.active_custom = Some(name.to_string());
+    fails
+}
+
 /// 恢复全部已存状态（启动时 / restore 命令 / 唤醒后）。
 fn apply_state() {
+    // 有激活中的自定义方案 → 应用它（内含平台/功耗/风扇/充电全部捆绑项）；
+    // 键盘/Aura 不属于方案捆绑项，走共通恢复
+    let active = STATE.lock().unwrap().active_custom.clone();
+    if let Some(name) = active {
+        let fails = {
+            let mut st = STATE.lock().unwrap();
+            let f = apply_custom_profile(&mut st, &name);
+            save_state(&st);
+            f
+        };
+        if !fails.is_empty() {
+            log(&format!("方案「{name}」应用部分失败: {}", fails.join("; ")));
+        }
+        apply_kbd_aura(&STATE.lock().unwrap());
+        return;
+    }
     let st = STATE.lock().unwrap().clone();
     log("── 应用已保存状态 ──");
 
@@ -357,6 +513,23 @@ fn apply_state() {
     }
 }
 
+/// 键盘亮度 / Aura 灯效：不属于任何方案捆绑项，各恢复路径共通。
+fn apply_kbd_aura(st: &State) {
+    if let Some(l) = st.kbd {
+        let r = write_sysfs(
+            "/sys/class/leds/asus::kbd_backlight/brightness",
+            &l.to_string(),
+        );
+        log(&format!("键盘亮度 {l}: {}", r.0));
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+    if let Some(a) = &st.aura {
+        let r = kbd_rgb_mode(a.mode, a.r, a.g, a.b, a.speed);
+        log(&format!("Aura mode={}: {}", a.mode, r.0));
+        std::thread::sleep(std::time::Duration::from_millis(150));
+    }
+}
+
 // ---------- 命令处理 ----------
 
 fn handle(v: Value) -> Value {
@@ -373,6 +546,84 @@ fn handle(v: Value) -> Value {
         "restore" => {
             apply_state();
             json!({"ok": true})
+        }
+        "profile_save" => {
+            let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").trim().to_string();
+            if name.is_empty() {
+                return json!({"ok": false, "out": "方案名称为空"});
+            }
+            let platform = v.get("platform").and_then(|x| x.as_str()).unwrap_or("balanced").to_string();
+            if profile_val(&platform).is_none() {
+                return json!({"ok": false, "out": format!("未知电源方案: {platform}")});
+            }
+            let snapshot = v.get("snapshot").and_then(|x| x.as_bool()).unwrap_or(true);
+            let mut st = STATE.lock().unwrap();
+            st.custom_profiles.retain(|p| p.name != name);
+            let mut cp = CustomProfile { name: name.clone(), platform, ..Default::default() };
+            if snapshot {
+                cp.stapm = st.stapm;
+                cp.fast = st.fast;
+                cp.slow = st.slow;
+                cp.coall = st.coall;
+                cp.cogfx = st.cogfx;
+                cp.tctl = st.tctl;
+                cp.boost = st.boost;
+                cp.cpu_temp = st.cpu_temp.clone();
+                cp.cpu_pwm = st.cpu_pwm.clone();
+                cp.gpu_temp = st.gpu_temp.clone();
+                cp.gpu_pwm = st.gpu_pwm.clone();
+                cp.charge_limit = st.charge_limit;
+            }
+            let n = st.custom_profiles.len();
+            st.custom_profiles.push(cp);
+            save_state(&st);
+            log(&format!("方案「{name}」已保存（快照={snapshot}，共 {n} 个）"));
+            json!({"ok": true})
+        }
+        "profile_apply" => {
+            let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            let (ok, out) = {
+                let mut st = STATE.lock().unwrap();
+                let fails = apply_custom_profile(&mut st, &name);
+                save_state(&st);
+                if fails.is_empty() {
+                    (true, format!("方案「{name}」已应用"))
+                } else {
+                    (false, fails.join("; "))
+                }
+            };
+            log(&format!("方案「{name}」应用: {out}"));
+            json!({"ok": ok, "out": out})
+        }
+        "profile_delete" => {
+            let name = v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string();
+            if BUILTIN.contains(&name.as_str()) {
+                return json!({"ok": false, "out": format!("内置方案「{name}」不可删除")});
+            }
+            let mut st = STATE.lock().unwrap();
+            st.custom_profiles.retain(|p| p.name != name);
+            if st.active_custom.as_deref() == Some(&name) {
+                st.active_custom = None;
+            }
+            save_state(&st);
+            log(&format!("方案「{name}」已删除"));
+            json!({"ok": true})
+        }
+        "profile_list" => {
+            let st = STATE.lock().unwrap();
+            let list: Vec<Value> = st
+                .custom_profiles
+                .iter()
+                .map(|p| {
+                    json!({
+                        "name": p.name,
+                        "platform": p.platform,
+                        "builtin": BUILTIN.contains(&p.name.as_str()),
+                        "active": st.active_custom.as_deref() == Some(&p.name),
+                    })
+                })
+                .collect();
+            json!({"ok": true, "profiles": list, "active": st.active_custom})
         }
         "set_lock_profile" => {
             let on = v.get("on").and_then(|x| x.as_bool()).unwrap_or(true);
@@ -392,6 +643,8 @@ fn handle(v: Value) -> Value {
             if r.is_ok() {
                 let mut st = STATE.lock().unwrap();
                 st.profile = Some(name.clone());
+                // 手动切平台 = 离开自定义方案（校验锁定继续以平台名为准）
+                st.active_custom = None;
                 save_state(&st);
             }
             log(&format!("档位 → {name}: {}", r.is_ok()));
@@ -574,31 +827,50 @@ fn handle(v: Value) -> Value {
                 let conn = zbus::blocking::Connection::system().map_err(|e| e.to_string())?;
                 let proxy = fan_curves::FanCurvesProxyBlocking::new(&conn).map_err(|e| e.to_string())?;
                 let p = platform_proxy().map_err(|e| e.to_string())?;
-                let profile = proxy_current_profile(&p)?;
-                let saved = proxy
-                    .fan_curve_data(profile)
-                    .map_err(|e| e.to_string())?;
-                log("校准：风扇全速运转约 6 秒…");
-                let temps = [40u8, 50, 60, 70, 80, 90, 95, 100];
-                for fan in [FanCurvePU::CPU, FanCurvePU::GPU] {
-                    write_fan_curve(
-                        profile,
-                        CurveData { fan, pwm: [255u8; 8], temp: temps, enabled: true },
-                    )
-                    .map_err(|e| e.to_string())?;
-                }
-                let (mut m1, mut m2) = (0i64, 0i64);
-                for _ in 0..15 {
+                let prev = proxy_current_profile(&p)?;
+                // 风扇上限受平台方案限制：临时切性能档拿真实满转速。
+                // 注意 asusd 曲线按档位隔离——255 全速曲线必须写在性能档的槽位
+                // （切档之后）才会作用于实际风扇，结束恢复原曲线与档位。
+                CALIBRATING.store(true, std::sync::atomic::Ordering::Relaxed);
+                let r = (|| -> Result<(i64, i64), String> {
+                    p.set_property::<u32>("PlatformProfile", 1u32)
+                        .map_err(|e| format!("切性能档失败: {e}"))?;
                     std::thread::sleep(std::time::Duration::from_millis(400));
-                    let (f1, f2) = hwmon_fan_rpms();
-                    m1 = m1.max(f1);
-                    m2 = m2.max(f2);
+                    let saved = proxy.fan_curve_data(1u32).map_err(|e| e.to_string())?;
+                    log("校准：风扇全速运转约 6 秒…");
+                    let temps = [40u8, 50, 60, 70, 80, 90, 95, 100];
+                    for fan in [FanCurvePU::CPU, FanCurvePU::GPU] {
+                        write_fan_curve(
+                            1u32,
+                            CurveData { fan, pwm: [255u8; 8], temp: temps, enabled: true },
+                        )
+                        .map_err(|e| e.to_string())?;
+                    }
+                    let (mut m1, mut m2) = (0i64, 0i64);
+                    for _ in 0..15 {
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                        let (f1, f2) = hwmon_fan_rpms();
+                        m1 = m1.max(f1);
+                        m2 = m2.max(f2);
+                    }
+                    for c in &saved {
+                        write_fan_curve(1u32, c.clone()).map_err(|e| e.to_string())?;
+                    }
+                    Ok((m1, m2))
+                })();
+                // 无论成败：恢复性能档原曲线、原档位与旁路标志
+                if r.is_err() {
+                    let _ = proxy.set_curves_to_defaults(1u32);
                 }
-                for c in &saved {
-                    write_fan_curve(profile, c.clone()).map_err(|e| e.to_string())?;
+                let _ = p.set_property::<u32>("PlatformProfile", prev);
+                CALIBRATING.store(false, std::sync::atomic::Ordering::Relaxed);
+                match r {
+                    Ok(v) => {
+                        log("校准完成，已恢复原曲线与平台");
+                        Ok(v)
+                    }
+                    Err(e) => Err(e),
                 }
-                log("校准完成，已恢复原曲线");
-                Ok((m1, m2))
             };
             match run() {
                 Ok((c, g)) => {
@@ -606,6 +878,7 @@ fn handle(v: Value) -> Value {
                     json!({"ok": c > 0 && g > 0, "calibrate": {"cpu": c, "gpu": g}})
                 }
                 Err(e) => {
+                    CALIBRATING.store(false, std::sync::atomic::Ordering::Relaxed);
                     log(&format!("校准失败: {e}"));
                     json!({"ok": false, "out": e.to_string()})
                 }
@@ -673,7 +946,7 @@ fn serve_socket() -> anyhow::Result<()> {
         match stream {
             Ok(s) => {
                 std::thread::spawn(move || {
-                    let mut reader = std::io::BufReader::new(match s.try_clone() {
+                    let reader = std::io::BufReader::new(match s.try_clone() {
                         Ok(c) => c,
                         Err(_) => return,
                     });
@@ -738,6 +1011,9 @@ fn watch_profile() {
             let p = platform_proxy()?;
             let iter = p.receive_property_changed::<u32>("PlatformProfile");
             for _ in iter {
+                if CALIBRATING.load(std::sync::atomic::Ordering::Relaxed) {
+                    continue;
+                }
                 std::thread::sleep(std::time::Duration::from_millis(300)); // 去抖
                 let st = STATE.lock().unwrap().clone();
                 let (Some(saved), true) = (&st.profile, st.profile_lock) else {
@@ -767,6 +1043,9 @@ fn verify_loop() {
         .unwrap_or(45);
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(secs));
+        if CALIBRATING.load(std::sync::atomic::Ordering::Relaxed) {
+            continue;
+        }
         let st = STATE.lock().unwrap().clone();
         let (Some(saved), true) = (&st.profile, st.profile_lock) else {
             continue;
@@ -790,6 +1069,25 @@ fn main() {
         std::process::exit(0);
     }
     log("asustuner-backend 启动（常驻 socket 模式）");
+    // 首次启动种子三个内置方案（空快照=仅切平台）
+    {
+        let mut st = STATE.lock().unwrap();
+        if st.custom_profiles.is_empty() {
+            for (name, platform) in [
+                ("静音", "quiet"),
+                ("平衡", "balanced"),
+                ("性能", "performance"),
+            ] {
+                st.custom_profiles.push(CustomProfile {
+                    name: name.into(),
+                    platform: platform.into(),
+                    ..Default::default()
+                });
+            }
+            save_state(&st);
+            log("已种子内置方案：静音/平衡/性能");
+        }
+    }
     // 启动即恢复已保存状态（覆盖重启重置）
     apply_state();
     watch_sleep();
