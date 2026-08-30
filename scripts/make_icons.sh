@@ -5,7 +5,8 @@
 #   默认主图: assets/icon.png（1024x1024 RGBA，见 commit "feat: app icon"）
 #
 # 产物:
-#   assets/icons/hicolor/<N>x<N>/apps/asustuner.png   — install.sh 安装目标布局
+#   assets/icons/hicolor/<N>x<N>/apps/asustuner.png      — install.sh 安装目标布局
+#   assets/icons/dark/<N>x<N>/asustuner-dark.png         — 深色面板托盘变体（白色高对比）
 #   托盘 (asustuner-tray/src/main.rs) 通过 include_bytes! 直接引用
 #   24/32/48 三档，改尺寸集后需重编译托盘。
 set -euo pipefail
@@ -23,3 +24,13 @@ for s in "${SIZES[@]}"; do
 done
 
 echo "已生成: ${SIZES[*]} -> assets/icons/hicolor/"
+
+# 深色面板托盘变体（透明底白色高对比，托盘菜单手动切换，不做自动检测）
+if [[ -f assets/icon-dark.png ]]; then
+  for s in 24 32 48; do
+    out="assets/icons/dark/${s}x${s}/asustuner-dark.png"
+    mkdir -p "$(dirname "$out")"
+    magick assets/icon-dark.png -resize "${s}x${s}" -strip "$out"
+  done
+  echo "已生成: 24 32 48 -> assets/icons/dark/"
+fi
