@@ -36,7 +36,9 @@ ok "二进制已安装"
 info "启用 root 后端服务（常驻）"
 install -m 644 systemd/asustuner-backend.service /etc/systemd/system/asustuner-backend.service
 systemctl daemon-reload
-systemctl enable --now asustuner-backend.service
+# enable --now 对已在运行的服务不会重启（会继续跑旧二进制），必须显式 restart
+systemctl enable asustuner-backend.service
+systemctl restart asustuner-backend.service
 sleep 1
 systemctl is-active asustuner-backend.service >/dev/null \
   && ok "asustuner-backend 运行中（socket: /run/asustuner-backend.sock）" \
