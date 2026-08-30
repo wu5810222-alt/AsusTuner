@@ -190,6 +190,12 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 - **tray**：右键菜单每次展开时查 `profile_list`（ksni menu() 每次调用，短连接毫秒级）动态列方案，● 标生效中；后端不可达退回三档直切
 - **语义注意**：切到 platform-only 的内置方案**不会重置**功率墙等当前值（想要"每方案独立值"用「存入当前设置」覆盖内置，G-Helper 式语义由 snapshot 实现）
 
+**2026-08-30 十四轮（前端体验修复，commits a6d8f89/9e6b62b）**：用户实测反馈四项——
+- 拖风扇曲线点变成滚页面：CurveEditor 抓中点时冻结外层 Flickable（`lockTarget` 属性 + onPressed/onReleased/onCanceled 切 interactive；空处按下仍可滚）
+- 坐标轴：纵轴每 1000RPM 一格逐格标注（上限非 1000 整数倍时末段无线无标）、横轴每 10°C 逐格标注；编辑器 320→360 高
+- 校准 6s 测出 3900 偏低（用户称本机可达 7000）：采样 6s→12s（30×400ms 留足爬升时间取全程峰值）；回填改 CPU/GPU 双信号触发
+- 方案按钮过多撑破布局：模式栏按钮区改横向 Flickable 滚动 + ScrollBar
+
 **待办（优先级序）**：
 1. **用户执行**：`sudo ./install.sh` 重部署（backend/托盘/GUI 全部更新；install.sh 会 systemctl restart）
 2. 性能档功耗行为专项实验（85W 现象：FPPT/STAPM 窗/ppd EPP 交互）
