@@ -142,7 +142,19 @@ fn restore_state() {
     }
 }
 
+/// GUI 是否在运行：探测其单实例锁 socket（比 pgrep 可靠——退出未收割的
+/// 僵尸进程同样会被 pgrep 匹配到，会误判"已在运行"）。
+fn gui_running() -> bool {
+    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+    std::os::unix::net::UnixStream::connect(format!("{dir}/asustuner-gui.lock")).is_ok()
+}
+
 fn open_gui() {
+    // 已有 GUI 实例则不再拉起（Wayland 下也无法可靠唤起已有窗口）
+    if gui_running() {
+        log("GUI 已在运行，不重复打开");
+        return;
+    }
     let path = std::env::current_exe()
         .ok()
         .and_then(|e| e.parent().map(|d| d.join("asustuner-gui")))
@@ -153,7 +165,14 @@ fn open_gui() {
         .stderr(std::process::Stdio::null())
         .spawn()
     {
-        Ok(_) => log("已打开主界面"),
+        Ok(mut child) => {
+            // 收割子进程：不 wait 会留僵尸（僵尸会污染进程探测）
+            let pid = child.id();
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+            log(&format!("已打开主界面 (pid {pid})"))
+        }
         Err(e) => log(&format!("打开主界面失败: {e}")),
     }
 }
