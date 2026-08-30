@@ -17,8 +17,6 @@ ApplicationWindow {
     minimumWidth: 720
     minimumHeight: 560
     title: qsTr("AsusTuner")
-    // 窗口/任务栏图标：hicolor 主题中的 asustuner（install.sh 安装）
-    icon.name: "asustuner"
     color: palette.window
 
     property bool showLog: false
