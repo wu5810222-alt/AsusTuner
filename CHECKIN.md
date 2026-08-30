@@ -1,6 +1,6 @@
 # AsusTuner Check-in（交接与改进基线）
 
-> 更新日期：2026-08-29 · 平台：ASUS TUF Gaming A16 FA607PV · KDE Wayland · Arch Linux
+> 更新日期：2026-08-30 · 平台：ASUS TUF Gaming A16 FA607PV · KDE Wayland · Arch Linux
 > 用途：新会话/新维护者快速接手；改进前先读 §6 教训与 §9 计划。
 
 ---
@@ -182,8 +182,16 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 
 **2026-08-30 十二轮（降压 cogfx 修复，9800575）**：用户实测发现降压 ok:false 但 coall 实际生效——Dragon Range（7940HX）不支持 cogfx(iGPU 降压)，GUI 同时发 --set-coall/--set-cogfx，cogfx 失败拉低整命令退出码。修复：backend set_curve/apply_state 把 coall/cogfx 拆成独立 ryzenadj 调用（各报成败，cogfx 仅自身成功才入状态）；GUI 滑块只发 all_cores（后端 igpu 能力保留给其他 family）。另注：ryzenadj 打印 4294967291 = -5 的 u32 补码，SMU 按有符号解释，数值正确非 bug。
 
+**2026-08-30 十三轮（G-Helper 式自定义配置方案，commits df4d141/f898487/35b1d43/29bf467）**：
+用户需求：不写死三方案，可新建命名方案并自选基座电源管理方案；风扇校准不再受当前电源方案限制。
+- **backend**：`CustomProfile` 存 state.json 的 `custom_profiles`（platform/stapm/fast/slow/coall/cogfx/tctl/boost/CPU·GPU风扇曲线/charge_limit，`#[serde(default)]`）；四命令 `profile_save{name,platform,snapshot}` / `profile_apply{name}` / `profile_delete{name}` / `profile_list`；`apply_custom_profile` 返回逐项失败明细（GUI 日志可见）；内置 静音/平衡/性能（platform-only 空快照，开机种子）**不可删除、同名保存=覆盖捆绑内容**；手动 `set_profile` 清 `active_custom`（回到普通平台模式）；键盘/Aura 不属方案捆绑项，抽 `apply_kbd_aura` 各恢复路径共用
+- **校准去方案化**：`fan_calibrate` 临时切性能档拿真实满转速——**asusd 曲线按档位隔离，255 全速曲线必须写在性能档槽位（切档之后）**，否则写的是旧档位槽位不生效（首版 bug）；`CALIBRATING` AtomicBool 旁路 watch_profile/verify_loop，成败均恢复原曲线+原档位
+- **GUI**：`cfg_list` qproperty（"名称\t平台\tbuiltin\tactive" 行包，Tab 分隔，CFG_LIST_LAST 去抖防空刷）；模式栏动态渲染方案按钮（active 高亮）；管理对话框=应用/存入当前设置（覆盖该方案捆绑内容）/删除（内置禁用）/新建（名称+基座 ComboBox 静音/平衡/性能/低功耗+是否含当前设置）；方案操作后 350ms 定时 refresh 加速应答回流
+- **tray**：右键菜单每次展开时查 `profile_list`（ksni menu() 每次调用，短连接毫秒级）动态列方案，● 标生效中；后端不可达退回三档直切
+- **语义注意**：切到 platform-only 的内置方案**不会重置**功率墙等当前值（想要"每方案独立值"用「存入当前设置」覆盖内置，G-Helper 式语义由 snapshot 实现）
+
 **待办（优先级序）**：
-1. **用户执行**：`sudo chown -R guts:guts ~/Projects/AsusTuner/target && sudo ./install.sh`（重装新功能 + 构建修复生效）
+1. **用户执行**：`sudo ./install.sh` 重部署（backend/托盘/GUI 全部更新；install.sh 会 systemctl restart）
 2. 性能档功耗行为专项实验（85W 现象：FPPT/STAPM 窗/ppd EPP 交互）
 3. dGPU 写入行为压测（温度墙/动态加速生效验证）
 4. GUI 拆紧凑模式 / CLI power 免 sudo 化（D-Bus 路径）/ 监控历史曲线
