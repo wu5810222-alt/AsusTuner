@@ -177,31 +177,38 @@ fn open_gui() {
     }
 }
 
-/// 22x22 ARGB 图标：蓝色圆角方块 + 白色圆点。
+/// 托盘图标：内嵌 24/32/48px PNG（由 scripts/make_icons.sh 从 assets/icon.png 生成），
+/// 启动时解码一次为 SNI 规定的 ARGB32 字节序；多尺寸供面板按缩放倍率挑选。
+const TRAY_PNGS: [&[u8]; 3] = [
+    include_bytes!("../../../assets/icons/hicolor/24x24/apps/asustuner.png"),
+    include_bytes!("../../../assets/icons/hicolor/32x32/apps/asustuner.png"),
+    include_bytes!("../../../assets/icons/hicolor/48x48/apps/asustuner.png"),
+];
+
 fn tray_icon() -> Vec<ksni::Icon> {
-    const N: usize = 22;
-    let mut data = vec![0u8; N * N * 4];
-    for y in 0..N {
-        for x in 0..N {
-            let i = (y * N + x) * 4;
-            // 圆角判定
-            let corner = (x < 3 || x >= N - 3) && (y < 3 || y >= N - 3);
-            let dx = x as i32 - 10;
-            let dy = y as i32 - 10;
-            let center = dx * dx + dy * dy <= 20; // 中心圆点半径 ~4.5
-            data[i] = 255; // A
-            if center {
-                data[i + 1] = 255; // R
-                data[i + 2] = 255; // G
-                data[i + 3] = 255; // B
-            } else if !corner {
-                data[i + 1] = 0x29;
-                data[i + 2] = 0x80;
-                data[i + 3] = 0xb9;
-            }
-        }
+    static ICONS: std::sync::OnceLock<Vec<ksni::Icon>> = std::sync::OnceLock::new();
+    ICONS
+        .get_or_init(|| TRAY_PNGS.iter().filter_map(|b| decode_png(b)).collect())
+        .clone()
+}
+
+/// PNG(RGBA8) -> ksni::Icon（ARGB32：A 在首字节的本机序）
+fn decode_png(bytes: &[u8]) -> Option<ksni::Icon> {
+    let mut reader = png::Decoder::new(std::io::Cursor::new(bytes)).read_info().ok()?;
+    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let info = reader.next_frame(&mut buf).ok()?;
+    if info.color_type != png::ColorType::Rgba {
+        return None;
     }
-    vec![ksni::Icon { width: N as i32, height: N as i32, data }]
+    let mut data = Vec::with_capacity(info.buffer_size());
+    for px in buf[..info.buffer_size()].chunks_exact(4) {
+        data.extend_from_slice(&[px[3], px[0], px[1], px[2]]);
+    }
+    Some(ksni::Icon {
+        width: info.width as i32,
+        height: info.height as i32,
+        data,
+    })
 }
 
 struct AsusTray {
@@ -227,6 +234,11 @@ impl ksni::Tray for AsusTray {
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         tray_icon()
+    }
+
+    fn icon_name(&self) -> String {
+        // hicolor 主题图标（install.sh 安装）作为 pixmap 不可用时的回退
+        "asustuner".into()
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
@@ -277,6 +289,29 @@ impl ksni::Tray for AsusTray {
 
     fn activate(&mut self, _x: i32, _y: i32) {
         open_gui();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_pngs_decode_to_square_opaque_icons() {
+        for b in TRAY_PNGS {
+            let ic = decode_png(b).expect("内嵌 PNG 应可解码为 RGBA");
+            assert_eq!(ic.width, ic.height, "图标应为正方形");
+            assert_eq!(
+                ic.data.len(),
+                (ic.width * ic.height * 4) as usize,
+                "应为 ARGB32 全量像素"
+            );
+            let opaque = ic.data.iter().step_by(4).filter(|&&a| a > 127).count();
+            assert!(
+                opaque * 5 > (ic.width * ic.height) as usize,
+                "主体应不透明（>20% 像素），实际 {opaque}"
+            );
+        }
     }
 }
 
