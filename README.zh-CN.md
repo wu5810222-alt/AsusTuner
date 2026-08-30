@@ -36,7 +36,7 @@ AsusTuner/
 │   ├── asustuner-backend/   # root 常驻后端（systemd）：Unix socket JSON 行协议、
 │   │                        #   state.json 持久化、开机/logind 唤醒重放、45s 漂移校验、单例守护
 │   ├── asustuner-gui/       # QML + cxx-qt (Qt6) 主界面：性能/风扇/GPU/电池/监控 五页签，写操作全走后端
-│   ├── asustuner-tray/      # ksni 托盘（无 Qt）：右键方案（●=生效中）/风扇预设/恢复配置/开 GUI/退出
+│   ├── asustuner-tray/      # ksni 托盘（无 Qt）：右键方案（●=生效中）/风扇预设/恢复配置/开 GUI/深色面板图标切换/退出
 │   └── asustuner-cli/       # 命令行客户端（直连 asusd + ryzenadj）
 ├── systemd/asustuner-backend.service
 ├── install.sh               # sudo 一次部署：编译 + 装二进制 + 起服务 + 托盘自启

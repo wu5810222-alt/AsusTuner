@@ -9,7 +9,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
-use ksni::menu::{MenuItem, StandardItem, SubMenu};
+use ksni::menu::{CheckmarkItem, MenuItem, StandardItem, SubMenu};
 use serde_json::{json, Value};
 
 fn sock_path() -> String {
@@ -185,11 +185,23 @@ const TRAY_PNGS: [&[u8]; 3] = [
     include_bytes!("../../../assets/icons/hicolor/48x48/apps/asustuner.png"),
 ];
 
-fn tray_icon() -> Vec<ksni::Icon> {
-    static ICONS: std::sync::OnceLock<Vec<ksni::Icon>> = std::sync::OnceLock::new();
-    ICONS
-        .get_or_init(|| TRAY_PNGS.iter().filter_map(|b| decode_png(b)).collect())
-        .clone()
+/// 深色面板变体（白色高对比；右键菜单手动切换，不做面板亮暗自动检测）
+const TRAY_PNGS_DARK: [&[u8]; 3] = [
+    include_bytes!("../../../assets/icons/dark/24x24/asustuner-dark.png"),
+    include_bytes!("../../../assets/icons/dark/32x32/asustuner-dark.png"),
+    include_bytes!("../../../assets/icons/dark/48x48/asustuner-dark.png"),
+];
+
+fn tray_icon(dark: bool) -> Vec<ksni::Icon> {
+    static SETS: std::sync::OnceLock<(Vec<ksni::Icon>, Vec<ksni::Icon>)> =
+        std::sync::OnceLock::new();
+    let (light, dark_set) = SETS.get_or_init(|| {
+        (
+            TRAY_PNGS.iter().filter_map(|b| decode_png(b)).collect(),
+            TRAY_PNGS_DARK.iter().filter_map(|b| decode_png(b)).collect(),
+        )
+    });
+    if dark { dark_set.clone() } else { light.clone() }
 }
 
 /// PNG(RGBA8) -> ksni::Icon（ARGB32：A 在首字节的本机序）
@@ -211,8 +223,34 @@ fn decode_png(bytes: &[u8]) -> Option<ksni::Icon> {
     })
 }
 
+/// 深色面板图标偏好：XDG state 下的小文件，托盘自持（root 的 state.json 不归托管管）。
+fn icon_pref_path() -> Option<std::path::PathBuf> {
+    let base = match std::env::var("XDG_STATE_HOME") {
+        Ok(s) if !s.is_empty() => s,
+        _ => format!("{}/.local/state", std::env::var("HOME").ok()?),
+    };
+    Some(std::path::PathBuf::from(base).join("asustuner/tray_dark_icon"))
+}
+
+fn load_dark_icon() -> bool {
+    icon_pref_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|s| s.trim() == "1")
+        .unwrap_or(false)
+}
+
+fn save_dark_icon(on: bool) {
+    if let Some(p) = icon_pref_path() {
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(p, if on { "1" } else { "0" });
+    }
+}
+
 struct AsusTray {
     _keep_alive: Arc<()>,
+    dark_icon: bool,
 }
 
 impl ksni::Tray for AsusTray {
@@ -233,7 +271,7 @@ impl ksni::Tray for AsusTray {
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        tray_icon()
+        tray_icon(self.dark_icon)
     }
 
     fn icon_name(&self) -> String {
@@ -279,9 +317,20 @@ impl ksni::Tray for AsusTray {
             ..Default::default()
         }));
         items.push(MenuItem::Separator);
+        items.push(MenuItem::Checkmark(CheckmarkItem {
+            label: "深色面板图标".into(),
+            checked: self.dark_icon,
+            // ksni 在 clicked 后自动重发属性与菜单 → 改字段即可，图标/勾选态即时生效
+            activate: Box::new(|tray: &mut Self| {
+                tray.dark_icon = !tray.dark_icon;
+                save_dark_icon(tray.dark_icon);
+            }),
+            ..Default::default()
+        }));
+        items.push(MenuItem::Separator);
         items.push(MenuItem::Standard(StandardItem {
             label: "退出托盘".into(),
-            activate: std::boxed::Box::new(|_: &mut Self| std::process::exit(0)),
+            activate: std::boxed::Box::new(move |_: &mut Self| std::process::exit(0)),
             ..Default::default()
         }));
         items
@@ -298,7 +347,7 @@ mod tests {
 
     #[test]
     fn tray_pngs_decode_to_square_opaque_icons() {
-        for b in TRAY_PNGS {
+        for b in TRAY_PNGS.into_iter().chain(TRAY_PNGS_DARK) {
             let ic = decode_png(b).expect("内嵌 PNG 应可解码为 RGBA");
             assert_eq!(ic.width, ic.height, "图标应为正方形");
             assert_eq!(
@@ -355,6 +404,7 @@ fn main() {
     use ksni::blocking::TrayMethods;
     let service = AsusTray {
         _keep_alive: Arc::new(()),
+        dark_icon: load_dark_icon(),
     }
     .spawn();
     if let Err(e) = service {

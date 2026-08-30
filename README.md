@@ -23,7 +23,7 @@ The only self-built component is a thin **privileged backend**: it does not talk
 |---|---|
 | `asustuner-backend` | Resident root service (systemd). JSON-line protocol over a Unix socket; persists state to `/var/lib/asustuner/state.json`; re-applies settings on boot and on wake-up (logind); 45 s drift-verify loop; singleton guard. |
 | `asustuner-gui` | Qt6 / QML main window (cxx-qt). Five tabs: Performance, Fans, GPU, Battery, Monitor. All writes are routed through the backend. |
-| `asustuner-tray` | Lightweight tray icon (ksni/SNI, no Qt). Right-click menu: profiles (● marks the active one), fan presets, restore config, open GUI, quit. |
+| `asustuner-tray` | Lightweight tray icon (ksni/SNI, no Qt). Right-click menu: profiles (● marks the active one), fan presets, restore config, open GUI, dark-panel icon toggle, quit. |
 | `asustuner-cli` | Command-line client; talks to asusd D-Bus and ryzenadj directly. |
 
 ## Features
