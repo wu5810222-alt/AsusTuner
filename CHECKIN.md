@@ -200,6 +200,10 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 
 **2026-08-30 十五轮（双语 README）**：新增英文版 README（面向 GitHub 国际开发者）；中文版 README 同步重写过时内容（原版停留在"无后端直连"早期架构——补齐四件套架构树/armoury 功率路径/自定义方案/GPU·电池健康·Aura 功能表/权限说明）；§2 架构树同步修正（补 tray/systemd/install.sh，"已删除"清单不再含 systemd——现行 backend.service 属方案 B 正常组件）。**约定：commit message 今后用英文**（历史不重写）。命名布局：**英文版 = `README.md`**（GitHub 仓库首页默认展示），中文版 = `README.zh-CN.md`，顶部互链实现"切换"——GitHub 无内置语言切换机制，靠默认文件名 + 互链约定。
 
+**2026-08-30 十六轮（用户实测 bug 二项，commits 3c75485/bd5f0dd）**：
+- **多 GUI**：托盘重复点击开出多个窗口。修复=GUI 启动绑 `$XDG_RUNTIME_DIR/asustuner-gui.lock` 单实例锁（可连接=已有实例即退出）+ 托盘锁探测防重。**重要教训：托盘 spawn GUI 后必须 wait 收割，否则留僵尸；僵尸同样会被 pgrep 匹配、骗过"已在运行"探测**（用户机实测 4 个 GUI 僵尸）——防重探测用锁 socket 不用 pgrep，托盘侧起线程 wait() 收割
+- **曲线来回跳**：应用两条曲线后立即读回 asusd，写命令是异步的，读到写前旧曲线，连续应用时编辑器在新旧两套曲线间翻转。修复=600ms 定时器延迟读回（应用/恢复默认均走 curveReadbackTimer）
+
 **待办（优先级序）**：
 1. **用户执行**：`sudo ./install.sh` 重部署（backend/托盘/GUI 全部更新；install.sh 会 systemctl restart）
 2. 性能档功耗行为专项实验（85W 现象：FPPT/STAPM 窗/ppd EPP 交互）
