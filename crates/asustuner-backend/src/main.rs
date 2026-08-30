@@ -15,6 +15,8 @@
 //               fan_defaults set_power{stapm,fast,slow} set_curve{all_cores,igpu}
 //               set_tctl{deg} boost{on} kbd{level} aura{mode,r,g,b,speed}
 //   直通(不持久): ryzenadj{args} exec{args} rapl
+//   asusd 配置(asusd 自持久化): ac_switch_get / ac_switch_set{on_ac?,profile_on_ac?,
+//               on_battery?,profile_on_battery?} —— 电源状态自动切换，档案位 0-3
 
 use std::io::{BufRead, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -285,6 +287,59 @@ fn proxy_current_profile(
     p: &zbus::blocking::Proxy<'static>,
 ) -> Result<u32, String> {
     p.get_property::<u32>("PlatformProfile").map_err(|e| e.to_string())
+}
+
+/// asusd 电源状态自动切换四属性（asusd 6.1+；旧版无这些属性 → Err）。
+/// 返回 (插电切换开, 插电目标档, 电池切换开, 电池目标档)。
+fn asusd_ac_switch_read(
+    p: &zbus::blocking::Proxy<'static>,
+) -> Result<(bool, u32, bool, u32), String> {
+    let on_ac: bool = p
+        .get_property("ChangePlatformProfileOnAc")
+        .map_err(|e| e.to_string())?;
+    let prof_ac: u32 = p
+        .get_property("PlatformProfileOnAc")
+        .map_err(|e| e.to_string())?;
+    let on_bat: bool = p
+        .get_property("ChangePlatformProfileOnBattery")
+        .map_err(|e| e.to_string())?;
+    let prof_bat: u32 = p
+        .get_property("PlatformProfileOnBattery")
+        .map_err(|e| e.to_string())?;
+    Ok((on_ac, prof_ac, on_bat, prof_bat))
+}
+
+/// 解析 ac_switch_set 请求（字段全可选，只写出现的；非法档位值收集为错误）。
+fn parse_ac_switch_req(
+    v: &Value,
+) -> (
+    Option<bool>,
+    Option<u32>,
+    Option<bool>,
+    Option<u32>,
+    Vec<String>,
+) {
+    let mut errs: Vec<String> = Vec::new();
+    let flag = |k: &str| v.get(k).and_then(|x| x.as_bool());
+    let mut prof = |k: &str| -> Option<u32> {
+        match v.get(k) {
+            None | Some(Value::Null) => None,
+            Some(x) => match x.as_u64() {
+                Some(n @ 0..=3) => Some(n as u32),
+                _ => {
+                    errs.push(format!("{k} 档位值非法（0-3）"));
+                    None
+                }
+            },
+        }
+    };
+    (
+        flag("on_ac"),
+        prof("profile_on_ac"),
+        flag("on_battery"),
+        prof("profile_on_battery"),
+        errs,
+    )
 }
 
 fn asusd_fan_defaults() -> Result<(), String> {
@@ -676,6 +731,75 @@ fn handle(v: Value) -> Value {
             }
             json!({"ok": r.is_ok(), "out": r.err().unwrap_or_default()})
         }
+        "ac_switch_get" => {
+            let p = match platform_proxy() {
+                Ok(p) => p,
+                Err(e) => return json!({"ok": false, "out": format!("asusd 不可达: {e}")}),
+            };
+            match asusd_ac_switch_read(&p) {
+                Ok((on_ac, prof_ac, on_bat, prof_bat)) => json!({
+                    "ok": true, "supported": true,
+                    "on_ac": on_ac, "profile_on_ac": prof_ac,
+                    "on_battery": on_bat, "profile_on_battery": prof_bat
+                }),
+                Err(e) => json!({"ok": true, "supported": false,
+                    "out": format!("asusd 无电源自动切换属性（版本过旧?）: {e}")}),
+            }
+        }
+        "ac_switch_set" => {
+            // 直通 asusd 四属性（asusd 自持久化到 asusd.ron，不进 state.json）
+            let (on_ac, prof_ac, on_bat, prof_bat, mut errs) = parse_ac_switch_req(&v);
+            let p = match platform_proxy() {
+                Ok(p) => p,
+                Err(e) => return json!({"ok": false, "out": format!("asusd 不可达: {e}")}),
+            };
+            if let Some(on) = on_ac {
+                if let Err(e) = p.set_property::<bool>("ChangePlatformProfileOnAc", on) {
+                    errs.push(format!("on_ac: {e}"));
+                }
+            }
+            if let Some(val) = prof_ac {
+                if let Err(e) = p.set_property::<u32>("PlatformProfileOnAc", val) {
+                    errs.push(format!("profile_on_ac: {e}"));
+                }
+            }
+            if let Some(on) = on_bat {
+                if let Err(e) = p.set_property::<bool>("ChangePlatformProfileOnBattery", on) {
+                    errs.push(format!("on_battery: {e}"));
+                }
+            }
+            if let Some(val) = prof_bat {
+                if let Err(e) = p.set_property::<u32>("PlatformProfileOnBattery", val) {
+                    errs.push(format!("profile_on_battery: {e}"));
+                }
+            }
+            // 读回验证：请求字段必须与 asusd 实际值一致（写操作必读回）
+            let mut mismatch: Vec<String> = Vec::new();
+            match asusd_ac_switch_read(&p) {
+                Ok((c_on_ac, c_ac, c_on_bat, c_bat)) => {
+                    if on_ac.is_some_and(|x| x != c_on_ac) {
+                        mismatch.push("on_ac".into());
+                    }
+                    if prof_ac.is_some_and(|x| x != c_ac) {
+                        mismatch.push("profile_on_ac".into());
+                    }
+                    if on_bat.is_some_and(|x| x != c_on_bat) {
+                        mismatch.push("on_battery".into());
+                    }
+                    if prof_bat.is_some_and(|x| x != c_bat) {
+                        mismatch.push("profile_on_battery".into());
+                    }
+                }
+                Err(e) => mismatch.push(format!("读回失败: {e}")),
+            }
+            let ok = errs.is_empty() && mismatch.is_empty();
+            let detail: Vec<String> = errs.into_iter().chain(mismatch).collect();
+            log(&format!(
+                "电源自动切换 插电={on_ac:?}/{prof_ac:?} 电池={on_bat:?}/{prof_bat:?}: ok={ok} {}",
+                detail.join("; ")
+            ));
+            json!({"ok": ok, "out": detail.join("; ")})
+        }
         "set_fan_curve" => {
             let fan = v.get("fan").and_then(|x| x.as_str()).unwrap_or("cpu").to_string();
             let gv = |k: &str| -> Option<Vec<u8>> {
@@ -955,6 +1079,37 @@ fn handle(v: Value) -> Value {
             json!({"ok": energy >= 0, "energy_uj": energy, "range_uj": range})
         }
         other => json!({"ok": false, "error": format!("未知命令: {other}")}),
+    }
+}
+
+#[cfg(test)]
+mod ac_switch_tests {
+    use super::parse_ac_switch_req;
+    use serde_json::json;
+
+    #[test]
+    fn empty_request_changes_nothing() {
+        let (a, b, c, d, errs) = parse_ac_switch_req(&json!({}));
+        assert!(a.is_none() && b.is_none() && c.is_none() && d.is_none());
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn full_request_parses() {
+        let (a, b, c, d, errs) = parse_ac_switch_req(&json!({
+            "on_ac": false, "profile_on_ac": 1,
+            "on_battery": true, "profile_on_battery": 2
+        }));
+        assert_eq!((a, b, c, d), (Some(false), Some(1), Some(true), Some(2)));
+        assert!(errs.is_empty());
+    }
+
+    #[test]
+    fn invalid_profile_value_rejected() {
+        let (_, b, _, d, errs) =
+            parse_ac_switch_req(&json!({"profile_on_ac": 9, "profile_on_battery": -1}));
+        assert!(b.is_none() && d.is_none());
+        assert_eq!(errs.len(), 2);
     }
 }
 

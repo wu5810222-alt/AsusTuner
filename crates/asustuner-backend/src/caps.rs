@@ -18,6 +18,8 @@ pub struct Caps {
     /// asusd 服务可达（档位/充电/风扇曲线）——启动时探测一次，信息性字段；
     /// 实际调用仍按原有重试逻辑，不据此跳过
     pub asusd: bool,
+    /// asusd 暴露电源状态自动切换属性（ChangePlatformProfileOnAc 等，asusd 6.1+）
+    pub asusd_ac_switch: bool,
     /// asus-armoury 功率墙固件属性存在（ppt_pl1_spl 可写）
     pub armoury_ppt: bool,
     /// hwmon name=asus 且含 fan1_input（双风扇 RPM 只读）
@@ -46,6 +48,7 @@ pub fn get() -> &'static Caps {
 pub fn detect() -> Caps {
     let mut c = detect_with_root(Path::new("/"));
     c.asusd = probe_asusd();
+    c.asusd_ac_switch = probe_asusd_ac_switch();
     c
 }
 
@@ -53,6 +56,7 @@ pub fn detect() -> Caps {
 pub fn detect_with_root(root: &Path) -> Caps {
     Caps {
         asusd: false,
+        asusd_ac_switch: false,
         armoury_ppt: root
             .join("sys/class/firmware-attributes/asus-armoury/attributes/ppt_pl1_spl/current_value")
             .exists(),
@@ -78,6 +82,22 @@ pub fn probe_asusd() -> bool {
             "xyz.ljones.Platform",
         )?;
         let _: u32 = p.get_property("PlatformProfile")?;
+        Ok(())
+    })()
+    .is_ok()
+}
+
+/// asusd 是否暴露电源状态自动切换属性（asusd 6.1+；一次属性读）。
+pub fn probe_asusd_ac_switch() -> bool {
+    (|| -> anyhow::Result<()> {
+        let conn = zbus::blocking::Connection::system()?;
+        let p = zbus::blocking::Proxy::new_owned(
+            conn,
+            "xyz.ljones.Asusd",
+            "/xyz/ljones",
+            "xyz.ljones.Platform",
+        )?;
+        let _: bool = p.get_property("ChangePlatformProfileOnAc")?;
         Ok(())
     })()
     .is_ok()
