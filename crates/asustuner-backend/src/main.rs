@@ -970,7 +970,13 @@ fn serve_socket() -> anyhow::Result<()> {
     let listener = UnixListener::bind(&path)?;
     if let Ok(full) = std::fs::canonicalize(&path) {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&full, std::fs::Permissions::from_mode(0o666));
+        // 默认 0666（单用户笔记本定位）；多用户机器可用 ASUSTUNER_SOCK_MODE 收紧
+        // （如 0660 + 共享组）——socket 后面是 root 权限命令面，见 COMPATIBILITY.md
+        let mode: u32 = std::env::var("ASUSTUNER_SOCK_MODE")
+            .ok()
+            .and_then(|m| u32::from_str_radix(&m, 8).ok())
+            .unwrap_or(0o666);
+        let _ = std::fs::set_permissions(&full, std::fs::Permissions::from_mode(mode));
     }
     log(&format!("socket 就绪: {path}"));
     for stream in listener.incoming() {

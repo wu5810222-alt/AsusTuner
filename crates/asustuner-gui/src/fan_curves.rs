@@ -68,31 +68,33 @@ use std::sync::{LazyLock, Mutex};
 static FC_PROXY: LazyLock<Mutex<Option<zbus::blocking::Connection>>> =
     LazyLock::new(|| Mutex::new(None));
 
-fn conn() -> zbus::blocking::Connection {
+fn conn() -> anyhow::Result<zbus::blocking::Connection> {
     let mut g = FC_PROXY.lock().unwrap();
     if g.is_none() {
         *g = zbus::blocking::Connection::system().ok();
     }
-    g.as_ref().expect("D-Bus system bus 连接失败").clone()
+    g.as_ref()
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("D-Bus system bus 连接失败（asusd 未运行？）"))
 }
 
 /// 读取当前档位的全部风扇曲线。
 pub fn read_fan_curves(profile: u32) -> anyhow::Result<Vec<CurveData>> {
-    let proxy = FanCurvesProxyBlocking::new(&conn())?;
+    let proxy = FanCurvesProxyBlocking::new(&conn()?)?;
     let curves = proxy.fan_curve_data(profile)?;
     Ok(curves)
 }
 
 /// 写入一条风扇曲线到指定档位（会自动激活）。
 pub fn write_fan_curve(profile: u32, curve: CurveData) -> anyhow::Result<()> {
-    let proxy = FanCurvesProxyBlocking::new(&conn())?;
+    let proxy = FanCurvesProxyBlocking::new(&conn()?)?;
     proxy.set_fan_curve(profile, curve)?;
     Ok(())
 }
 
 /// 恢复当前档位风扇曲线为默认。
 pub fn restore_defaults(profile: u32) -> anyhow::Result<()> {
-    let proxy = FanCurvesProxyBlocking::new(&conn())?;
+    let proxy = FanCurvesProxyBlocking::new(&conn()?)?;
     proxy.set_curves_to_defaults(profile)?;
     Ok(())
 }
