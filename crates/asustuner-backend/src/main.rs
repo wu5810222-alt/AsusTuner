@@ -119,6 +119,32 @@ fn run_cmd(bin: &str, args: &[String]) -> (bool, String) {
     }
 }
 
+fn hwmon_fan_rpms() -> (i64, i64) {
+    // 找 name=asus 的 hwmon，读 fan1_input/fan2_input (RPM)
+    let dir = match std::fs::read_dir("/sys/class/hwmon") {
+        Ok(d) => d,
+        Err(_) => return (-1, -1),
+    };
+    for e in dir.flatten() {
+        let d = e.path();
+        let is_asus = std::fs::read_to_string(d.join("name"))
+            .map(|n| n.trim() == "asus")
+            .unwrap_or(false);
+        if is_asus {
+            let f1 = std::fs::read_to_string(d.join("fan1_input"))
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(-1);
+            let f2 = std::fs::read_to_string(d.join("fan2_input"))
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+                .unwrap_or(-1);
+            return (f1, f2);
+        }
+    }
+    (-1, -1)
+}
+
 fn write_sysfs(path: &str, val: &str) -> (bool, String) {
     match std::fs::write(path, val) {
         Ok(_) => (true, String::new()),
@@ -540,6 +566,50 @@ fn handle(v: Value) -> Value {
             let r = write_sysfs(&path, &val.to_string());
             log(&format!("armoury {attr}={val} -> {}", r.0));
             json!({"ok": r.0, "out": r.1})
+        }
+        "fan_calibrate" => {
+            // 校准满转速：存当前曲线 → 全速 6s 采样峰值 → 恢复
+            use fan_curves::{write_fan_curve, CurveData, FanCurvePU};
+            let run = || -> Result<(i64, i64), String> {
+                let conn = zbus::blocking::Connection::system().map_err(|e| e.to_string())?;
+                let proxy = fan_curves::FanCurvesProxyBlocking::new(&conn).map_err(|e| e.to_string())?;
+                let p = platform_proxy().map_err(|e| e.to_string())?;
+                let profile = proxy_current_profile(&p)?;
+                let saved = proxy
+                    .fan_curve_data(profile)
+                    .map_err(|e| e.to_string())?;
+                log("校准：风扇全速运转约 6 秒…");
+                let temps = [40u8, 50, 60, 70, 80, 90, 95, 100];
+                for fan in [FanCurvePU::CPU, FanCurvePU::GPU] {
+                    write_fan_curve(
+                        profile,
+                        CurveData { fan, pwm: [255u8; 8], temp: temps, enabled: true },
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+                let (mut m1, mut m2) = (0i64, 0i64);
+                for _ in 0..15 {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    let (f1, f2) = hwmon_fan_rpms();
+                    m1 = m1.max(f1);
+                    m2 = m2.max(f2);
+                }
+                for c in &saved {
+                    write_fan_curve(profile, c.clone()).map_err(|e| e.to_string())?;
+                }
+                log("校准完成，已恢复原曲线");
+                Ok((m1, m2))
+            };
+            match run() {
+                Ok((c, g)) => {
+                    log(&format!("校准结果 CPU={c} GPU={g}"));
+                    json!({"ok": c > 0 && g > 0, "calibrate": {"cpu": c, "gpu": g}})
+                }
+                Err(e) => {
+                    log(&format!("校准失败: {e}"));
+                    json!({"ok": false, "out": e.to_string()})
+                }
+            }
         }
         "aura" => {
             let g8 = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0) as u8;

@@ -45,6 +45,8 @@ pub mod qobject {
         #[qproperty(u32, battery_cycles)]
         #[qproperty(f64, battery_voltage)]
         #[qproperty(f64, battery_power)]
+        #[qproperty(f64, fan_calib_cpu)]
+        #[qproperty(f64, fan_calib_gpu)]
         #[qproperty(u32, charge_limit)]
         #[qproperty(bool, backend_running)]
         #[namespace = "asustuner"]
@@ -139,6 +141,11 @@ pub mod qobject {
         #[cxx_name = "setIgpuCurve"]
         fn set_igpu_curve(&self, igpu: i32);
 
+        // 校准满转速（后端全速运转 ~6s 实测）
+        #[qinvokable]
+        #[cxx_name = "calibrateFans"]
+        fn calibrate_fans(&self);
+
         // 原始曲线 "t1,..,t8;p1,..,p8"（PWM 0-255 原始值），fan: 0=CPU 1=GPU
         #[qinvokable]
         #[cxx_name = "fanCurveRaw"]
@@ -216,6 +223,8 @@ pub struct AsusTunerRust {
     battery_cycles: u32,
     battery_voltage: f64,
     battery_power: f64,
+    fan_calib_cpu: f64,
+    fan_calib_gpu: f64,
     charge_limit: u32,
     backend_running: bool,
 }
@@ -256,6 +265,8 @@ impl Default for AsusTunerRust {
             battery_cycles: 0,
             battery_voltage: 0.0,
             battery_power: 0.0,
+            fan_calib_cpu: 0.0,
+            fan_calib_gpu: 0.0,
             charge_limit: 100,
             backend_running: false,
         }
@@ -664,6 +675,16 @@ impl qobject::AsusTunerObject {
                         self.as_mut().set_cpu_power(watts);
                     }
                 }
+                if let Some(cal) = r.get("calibrate") {
+                    let c = cal.get("cpu").and_then(|x| x.as_f64()).unwrap_or(0.0);
+                    let g = cal.get("gpu").and_then(|x| x.as_f64()).unwrap_or(0.0);
+                    if c > 0.0 {
+                        self.as_mut().set_fan_calib_cpu(c);
+                    }
+                    if g > 0.0 {
+                        self.as_mut().set_fan_calib_gpu(g);
+                    }
+                }
             }
         }
 
@@ -866,6 +887,14 @@ impl qobject::AsusTunerObject {
     pub fn restore_fan_curves(&self) {
         log_line("▶ 恢复默认风扇曲线".to_string());
         backend_send(&serde_json::json!({"cmd": "fan_defaults"}));
+    }
+
+    /// 校准满转速：后端全速运转采样，结果经 drain 回填属性。
+    pub fn calibrate_fans(&self) {
+        log_line("▶ 校准满转速（风扇将全速运转约 6 秒）…".to_string());
+        if ensure_backend() {
+            backend_send(&serde_json::json!({"cmd": "fan_calibrate"}));
+        }
     }
 
     /// iGPU 降压：仅发 cogfx（all_cores=0 表示不变更）。

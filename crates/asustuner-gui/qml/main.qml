@@ -735,12 +735,28 @@ ApplicationWindow {
                                 font.pixelSize: 11
                             }
                             Item { Layout.fillWidth: true }
+                            Button {
+                                text: qsTr("校准满转速")
+                                ToolTip.visible: hovered
+                                ToolTip.text: qsTr("风扇将全速运转约 6 秒实测最大转速，结束自动恢复曲线")
+                                onClicked: tuner.calibrateFans()
+                            }
                             Label { text: qsTr("满转速参考"); color: palette.text; font.pixelSize: 12 }
                             SpinBox {
                                 id: maxRpmBox
                                 from: 3000; to: 9000; stepSize: 100
                                 editable: true; value: 6000
                                 onValueChanged: fanCol.maxRpm = value
+                            }
+                            Connections {
+                                target: tuner
+                                function onFanCalibCpuChanged() {
+                                    if (tuner.fan_calib_cpu > 0) {
+                                        maxRpmBox.value = Math.max(
+                                            Math.round(tuner.fan_calib_cpu),
+                                            Math.round(tuner.fan_calib_gpu))
+                                    }
+                                }
                             }
                         }
                         CurveEditor {
@@ -764,6 +780,13 @@ ApplicationWindow {
                                   + qsTr("GPU 温度 ") + fanCol.toTempStr(fanCol.gpuPoints)
                                   + qsTr(" / 转速≈ ") + fanCol.toRpmStr(fanCol.gpuPoints) + " RPM"
                             color: palette.mid
+                            font.pixelSize: 11
+                        }
+                        Label {
+                            visible: tuner.fan_calib_cpu > 0
+                            text: qsTr("校准实测: CPU %1 RPM / GPU %2 RPM（满转速参考已自动填入）")
+                                .arg(tuner.fan_calib_cpu.toFixed(0)).arg(tuner.fan_calib_gpu.toFixed(0))
+                            color: "#2ecc71"
                             font.pixelSize: 11
                         }
                         RowLayout {
