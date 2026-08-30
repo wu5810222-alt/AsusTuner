@@ -49,6 +49,8 @@ pub mod qobject {
         #[qproperty(f64, fan_calib_gpu)]
         #[qproperty(u32, charge_limit)]
         #[qproperty(bool, backend_running)]
+        // 配置方案列表（每行 "名称\t平台\tbuiltin\tactive"，Tab 分隔）
+        #[qproperty(QString, cfg_list)]
         #[namespace = "asustuner"]
         type AsusTunerObject = super::AsusTunerRust;
 
@@ -150,6 +152,19 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "fanCurveRaw"]
         fn fan_curve_raw(&self, fan: u32) -> QString;
+
+        // ---- 配置方案（G-Helper 式，经 root 后端）----
+        #[qinvokable]
+        #[cxx_name = "cfgApply"]
+        fn cfg_apply(&self, name: &QString);
+
+        #[qinvokable]
+        #[cxx_name = "cfgSave"]
+        fn cfg_save(&self, name: &QString, platform: &QString, snapshot: bool);
+
+        #[qinvokable]
+        #[cxx_name = "cfgDelete"]
+        fn cfg_delete(&self, name: &QString);
     }
 }
 
@@ -187,6 +202,9 @@ static PENDING_REPLIES: LazyLock<Mutex<std::collections::VecDeque<serde_json::Va
 /// RAPL 采样状态：(上次能量 uJ, 上次时刻)。
 static RAPL_STATE: LazyLock<Mutex<Option<(i64, std::time::Instant)>>> =
     LazyLock::new(|| Mutex::new(None));
+
+/// 上次下发到 QML 的方案列表打包串（去抖，避免每轮 refresh 重刷按钮）。
+static CFG_LIST_LAST: LazyLock<Mutex<String>> = LazyLock::new(|| Mutex::new(String::new()));
 
 /// Rust 侧 QObject 数据。
 pub struct AsusTunerRust {
@@ -227,6 +245,7 @@ pub struct AsusTunerRust {
     fan_calib_gpu: f64,
     charge_limit: u32,
     backend_running: bool,
+    cfg_list: QString,
 }
 
 impl Default for AsusTunerRust {
@@ -269,6 +288,7 @@ impl Default for AsusTunerRust {
             fan_calib_gpu: 0.0,
             charge_limit: 100,
             backend_running: false,
+            cfg_list: QString::from(""),
         }
     }
 }
@@ -658,6 +678,7 @@ impl qobject::AsusTunerObject {
         // CPU 瞬时功率：经 root 后端读 RAPL 能量，差分计算（异步应答，下轮生效）
         if backend_connected() {
             backend_send(&serde_json::json!({"cmd": "rapl"}));
+            backend_send(&serde_json::json!({"cmd": "profile_list"}));
         }
         {
             let replies: Vec<serde_json::Value> = {
@@ -683,6 +704,27 @@ impl qobject::AsusTunerObject {
                     }
                     if g > 0.0 {
                         self.as_mut().set_fan_calib_gpu(g);
+                    }
+                }
+                // 配置方案列表：打包为 "名称\t平台\tbuiltin\tactive" 行
+                if let Some(profiles) = r.get("profiles").and_then(|x| x.as_array()) {
+                    let mut packed = String::new();
+                    for p in profiles {
+                        let name = p.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                        let platform = p.get("platform").and_then(|x| x.as_str()).unwrap_or("");
+                        let builtin = p.get("builtin").and_then(|x| x.as_bool()).unwrap_or(false);
+                        let active = p.get("active").and_then(|x| x.as_bool()).unwrap_or(false);
+                        packed.push_str(&format!(
+                            "{name}\t{platform}\t{}\t{}\n",
+                            builtin as u8,
+                            active as u8
+                        ));
+                    }
+                    let mut last = CFG_LIST_LAST.lock().unwrap();
+                    if *last != packed {
+                        *last = packed.clone();
+                        drop(last);
+                        self.as_mut().set_cfg_list(QString::from(packed));
                     }
                 }
             }
@@ -777,6 +819,40 @@ impl qobject::AsusTunerObject {
         let name: String = profile.into();
         log_line(format!("▶ 档位 → {name}"));
         backend_send(&serde_json::json!({"cmd": "set_profile", "name": name}));
+        // 手动切平台 = 离开自定义方案，列表 active 标记需要更新
+        backend_send(&serde_json::json!({"cmd": "profile_list"}));
+    }
+
+    // ---- 配置方案（G-Helper 式）----
+
+    pub fn cfg_apply(&self, name: &QString) {
+        let n: String = name.into();
+        log_line(format!("▶ 应用方案「{n}」"));
+        if ensure_backend() {
+            backend_send(&serde_json::json!({"cmd": "profile_apply", "name": n}));
+            backend_send(&serde_json::json!({"cmd": "profile_list"}));
+        }
+    }
+
+    pub fn cfg_save(&self, name: &QString, platform: &QString, snapshot: bool) {
+        let n: String = name.into();
+        let p: String = platform.into();
+        log_line(format!("▶ 保存方案「{n}」（平台 {p}，含当前设置={snapshot}）"));
+        if ensure_backend() {
+            backend_send(&serde_json::json!({
+                "cmd": "profile_save", "name": n, "platform": p, "snapshot": snapshot
+            }));
+            backend_send(&serde_json::json!({"cmd": "profile_list"}));
+        }
+    }
+
+    pub fn cfg_delete(&self, name: &QString) {
+        let n: String = name.into();
+        log_line(format!("▶ 删除方案「{n}」"));
+        if ensure_backend() {
+            backend_send(&serde_json::json!({"cmd": "profile_delete", "name": n}));
+            backend_send(&serde_json::json!({"cmd": "profile_list"}));
+        }
     }
 
     pub fn apply_charge_limit(&self, limit: u32) {
