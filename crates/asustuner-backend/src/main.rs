@@ -498,6 +498,30 @@ fn handle(v: Value) -> Value {
             }
             json!({"ok": r.0, "out": r.1})
         }
+        "armoury_set" => {
+            // 固件属性白名单写入（dGPU/GPU 模式等；ppt 系走 set_power）
+            const ALLOW: &[&str] = &[
+                "nv_temp_target",
+                "nv_dynamic_boost",
+                "gpu_mux_mode",
+                "dgpu_disable",
+            ];
+            let attr = v
+                .get("attr")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string();
+            if !ALLOW.contains(&attr.as_str()) {
+                return json!({"ok": false, "out": format!("属性不在白名单: {attr}")});
+            }
+            let val = g64("value");
+            let path = format!(
+                "/sys/class/firmware-attributes/asus-armoury/attributes/{attr}/current_value"
+            );
+            let r = write_sysfs(&path, &val.to_string());
+            log(&format!("armoury {attr}={val} -> {}", r.0));
+            json!({"ok": r.0, "out": r.1})
+        }
         "aura" => {
             let g8 = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0) as u8;
             let (m, r_, g_, b_, s) = (g8("mode"), g8("r"), g8("g"), g8("b"), g8("speed"));
