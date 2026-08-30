@@ -17,6 +17,7 @@
 |---|---|---|
 | 性能档位（quiet/balanced/performance） | 解 asusd `xyz.ljones.Platform` 的 `PlatformProfile` | ✅ |
 | 自定义配置方案（G-Helper 式） | 命名方案 = 基座档位 + 设置快照（功率墙/降压/温度墙/风扇曲线/充电限制）；内置三方案不可删、同名保存=覆盖；GUI/托盘动态列出 | ✅ |
+| 电源状态自动切方案 | asusd 内置的"插电/用电池自动切换档位"开关与目标档，在 GUI 电池页直读直写；asusd 6.1 以下自动隐藏 | ✅ |
 | 功率墙 PL1/PL2/PL3（STAPM/FAST/SLOW） | asus-armoury 固件属性（无 armoury 机型回退 ryzenadj）；固件不跨重启，由后端开机重放 | ✅ |
 | CPU 降压（Curve Optimiser） | `ryzenadj --set-coall`（iGPU `--set-cogfx` 视 CPU 支持） | ✅ |
 | 温度墙（CPU/dGPU） | `ryzenadj --tctl-temp` / armoury `nv_temp_target` | ✅ |

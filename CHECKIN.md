@@ -58,6 +58,7 @@ AsusTuner/
 | 功能 | 实现路径 | 状态 |
 |---|---|---|
 | 性能档位 quiet/balanced/performance | asusd `PlatformProfile` (property, u32) | ✅ CLI 读回验证 + gdbus 验证 |
+| 电源状态自动切换（插电/用电池自动切档位） | asusd `ChangePlatformProfileOnAc/OnBattery` (b) + `PlatformProfileOnAc/OnBattery` (u32)，后端 `ac_switch_get/set` 直通+读回验证，GUI 电池页 | ✅ asusd 6.1+，旧版 caps 隐藏 |
 | 充电限制 60/80/100 | asusd `ChargeControlEndThreshold` (property, u8) | ✅ 接口通（GUI 按钮） |
 | 风扇曲线读 | asusd `fan_curve_data(profile)` | ✅ CLI fan-get 验证 |
 | 风扇曲线写/恢复默认 | asusd `set_fan_curve` / `set_curves_to_defaults` | ✅ CLI fan-set 写回+读回验证 |
@@ -79,6 +80,8 @@ AsusTuner/
   - `PlatformProfileChoices` → [u32]
   - `ChargeControlEndThreshold` u8（充电限制 %）
   - `ProfileQuietEpp/BalancedEpp/PerformanceEpp` u32
+  - `ChangePlatformProfileOnAc` / `ChangePlatformProfileOnBattery` b（电源状态自动切档开关，asusd 6.1+）
+  - `PlatformProfileOnAc` / `PlatformProfileOnBattery` u32（自动切档目标档，枚举同 PlatformProfile；Set 后 asusd 自持久化到 asusd.ron，普通用户可写已实测）
 - **`xyz.ljones.FanCurves`**（方法调用）：
   - `fan_curve_data(profile:u32) -> Vec<CurveData>`
   - `set_fan_curve(profile:u32, curve:CurveData)`（自动激活）
@@ -107,7 +110,7 @@ AsusTuner/
 2. **写操作必须读回验证**：曾只验证"读监控+弹窗"，实际所有写操作因 root 权限静默失败，用户反馈"完全起不到作用"。
 3. **普通用户可直连 asusd 写**（gdbus 实测 PlatformProfile Set 生效），不要想当然认为 D-Bus 系统服务都要 root。
 4. **ryzenadj 参数格式**：短选项粘等号不被解析（用长选项）。
-5. **cxx-qt bridge 语法限制**：bridge 宏展开的文件里**不能用 let-else**（报 expected `;`，用 match）；QString→String 用 `.into()`（无 .as_str()）；qproperty 名用 snake_case（getter/getXxx、C++ setter 是 PascalCase）；改属性的 invokable 签名 `self: Pin<&mut Self>` 且实现里用 `self.as_mut().set_xxx()`；QML `console.log` 不进 stderr，验证 QML JS 执行需在 Rust invokable 里 eprintln。
+5. **cxx-qt bridge 语法限制**：bridge 宏展开的文件里**不能用 let-else**（报 expected `;`，用 match）；QString→String 用 `.into()`（无 .as_str()）；qproperty 名用 snake_case（getter/getXxx、C++ setter 是 PascalCase）；**qproperty 自动生成 `set_<prop>` Rust setter——invokable 不能与之重名**（用 `apply_` 前缀，如 `apply_charge_limit`/`apply_ac_switch_ac`）；改属性的 invokable 签名 `self: Pin<&mut Self>` 且实现里用 `self.as_mut().set_xxx()`；QML `console.log` 不进 stderr，验证 QML JS 执行需在 Rust invokable 里 eprintln。
 6. **zvariant derive**：zvariant 4 没有 `derive` feature（宏默认可用），Cargo.toml 里写 `features=["derive"]` 会解析失败。
 7. **后台调试**：Wayland 下 wmctrl/xdotool 看不到窗口；截图用 `spectacle -b -n -f` 全屏 + convert 裁剪；后台进程用 run_in_background 或 setsid，别混管道。
 8. **验证 UI 用视觉**：启动 GUI 后 spectacle 截图读图确认，比只看日志可靠。
@@ -212,6 +215,13 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 - **健壮性顺手**：gui fan_curves panic→Result；`ASUSTUNER_SOCK_MODE`（默认 0666 不变，多用户机可收紧）
 - **文档**：README 双语补充——分发行版依赖安装（Arch/Debian/Fedora/openSUSE/NixOS，修正 Arch 包名 asusctl、ryzenadj 属 AUR、Debian 需 qml6-module-* 拆分包）、桌面环境适配表（SNI/polkit agent/user unit）、兼容矩阵摘要链接 COMPATIBILITY.md
 - 单测 10 个全过（backend caps 5 + gui 5）；本机 caps 全命中验证；README 双语版为用户维护（未提交的改动未动）
+
+**2026-08-30 十八轮（电源状态自动切换：根因排查 → GUI 暴露，commits 6544a96/5ac7019）**：
+用户报"插电后方案被自动改成 performance"→ 排查实锤**真凶是 asusd 内置行为**（`/etc/asusd/asusd.ron` `change_platform_profile_on_ac: true`/`platform_profile_on_ac: Performance`，拔电切 Quiet 同开；KDE powerdevilrc 无 AC 切换配置、AsusTuner backend 无 AC watcher），日志特征行 `Setting Performance before EPP`。落地：
+- **backend**：`ac_switch_get` / `ac_switch_set{on_ac?,profile_on_ac?,on_battery?,profile_on_battery?}` 直通 asusd `xyz.ljones.Platform` 四属性（写后强制读回验证；非法档位值 0-3 拒绝；asusd 自持久化，**不进 state.json**）；`caps.asusd_ac_switch` 探测（asusd 6.1+）；解析逻辑 `parse_ac_switch_req` 带 3 单测（共 11 测全绿）
+- **GUI（电池页首组）**：「电源状态自动切换」= 每电源状态一个 ComboBox（不切换/平衡/性能/安静/低功耗，序-1=asusd 档位值）；写经后端、**读由 refresh() 直连 asusd 四属性**（350ms cfgRespTimer 延迟读回自愈回显）；`ac_switch_available` 门控显隐；QML 侧不绑 currentIndex（选中会破坏绑定），改用 Connections onXxxChanged 同步
+- **验证链**：gdbus 用户态写四属性实测（含 asusd.ron 即时持久化）→ 隔离后端实例（/tmp socket + 空 state）socket 全链路 5 连测 → 隔离 GUI 视觉确认
+- 待用户 `sudo ./install.sh` 重部署后在电池页关闭"插电时切到"即可根治
 
 **待办（优先级序）**：
 1. **用户执行**：`sudo ./install.sh` 重部署（backend/托盘/GUI 全部更新；install.sh 会 systemctl restart）

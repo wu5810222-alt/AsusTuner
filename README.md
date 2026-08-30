@@ -32,6 +32,7 @@ The only self-built component is a thin **privileged backend**: it does not talk
 |---|---|---|
 | Platform profiles (quiet / balanced / performance) | asusd `xyz.ljones.Platform` `PlatformProfile` | ✅ |
 | Custom profiles, G-Helper style | Named profile = base platform + snapshot (power limits, undervolt, temp targets, fan curves, charge limit). The three built-ins cannot be deleted; saving under the same name overwrites their snapshot. Listed dynamically in GUI and tray. | ✅ |
+| Power-state auto profile switching | asusd's built-in "switch platform profile on AC / battery" toggles and targets, exposed in the GUI (battery tab); hidden automatically on asusd < 6.1 | ✅ |
 | Power limits PL1/PL2/PL3 (STAPM/FAST/SLOW) | `asus-armoury` firmware attributes; ryzenadj fallback on models without armoury. Not persistent in firmware — reapplied by the backend on boot. | ✅ |
 | CPU Curve Optimizer undervolt | `ryzenadj --set-coall` (iGPU `--set-cogfx` where the CPU supports it) | ✅ |
 | Temperature targets (CPU / dGPU) | `ryzenadj --tctl-temp` / armoury `nv_temp_target` | ✅ |

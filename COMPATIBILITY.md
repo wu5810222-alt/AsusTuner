@@ -9,6 +9,7 @@
 |---|---|---|---|
 | 性能档位（静音/平衡/性能/低功耗） | ✅ asusd | ✅ asusd（与 CPU 平台无关） | ❌ 无 asusd |
 | 充电限制 | ✅ asusd | ✅ asusd | ❌（未来可走标准 `charge_control_end_threshold` sysfs） |
+| 电源状态自动切换（插电/用电池自动切档位） | ✅ asusd 6.1+ 四属性（GUI 电池页，旧版自动隐藏） | ✅ 同左（与 CPU 平台无关） | ❌ 无 asusd |
 | 功率墙 PL1/PL2/PL3 | ✅ asus-armoury 固件接口 | ✅ 同左（华硕固件接口，CPU 无关） | ❌ 各家固件接口不同 |
 | 功率墙回退路径 | ✅ ryzenadj（armoury 缺失时） | —（ryzenadj 不适用，caps 自动不回退） | ❌ |
 | CPU 降压 (Curve Optimiser) | ✅ ryzenadj coall/cogfx | ❌ 隐藏（Intel 新 U 的降压 MSR 普遍被厂商锁定，业界无解） | ❌ |
