@@ -53,6 +53,11 @@ pub mod qobject {
         #[qproperty(QString, cfg_list)]
         // AMD 功控可用（ryzenadj + AuthenticAMD）：控制降压/温度墙控件显隐
         #[qproperty(bool, amd_adj)]
+        // 电源状态自动切换（asusd 插电/用电池自动切方案；asusd 6.1+，不支持时整组隐藏）
+        #[qproperty(bool, ac_switch_available)]
+        // 组合框序：0=不切换，1..4=平衡/性能/安静/低功耗（asusd 档位 0..3 +1）
+        #[qproperty(u32, ac_switch_ac)]
+        #[qproperty(u32, ac_switch_battery)]
         #[namespace = "asustuner"]
         type AsusTunerObject = super::AsusTunerRust;
 
@@ -167,6 +172,16 @@ pub mod qobject {
         #[qinvokable]
         #[cxx_name = "cfgDelete"]
         fn cfg_delete(&self, name: &QString);
+
+        // 电源状态自动切换（写经 root 后端→asusd；读回由 refresh 直读 asusd）
+        // 命名用 apply_ 前缀：qproperty 会生成 set_ac_switch_* setter，避免撞名
+        #[qinvokable]
+        #[cxx_name = "applyAcSwitchAc"]
+        fn apply_ac_switch_ac(&self, idx: u32);
+
+        #[qinvokable]
+        #[cxx_name = "applyAcSwitchBattery"]
+        fn apply_ac_switch_battery(&self, idx: u32);
     }
 }
 
@@ -249,6 +264,9 @@ pub struct AsusTunerRust {
     backend_running: bool,
     cfg_list: QString,
     amd_adj: bool,
+    ac_switch_available: bool,
+    ac_switch_ac: u32,
+    ac_switch_battery: u32,
 }
 
 impl Default for AsusTunerRust {
@@ -293,6 +311,9 @@ impl Default for AsusTunerRust {
             backend_running: false,
             cfg_list: QString::from(""),
             amd_adj: false,
+            ac_switch_available: false,
+            ac_switch_ac: 0,
+            ac_switch_battery: 0,
         }
     }
 }
@@ -489,6 +510,30 @@ fn backend_ryzenadj_persist(cmd: &str, mut payload: serde_json::Value) {
         o.insert("cmd".into(), serde_json::Value::String(cmd.into()));
     }
     backend_send(&payload);
+}
+
+/// 电源状态自动切换：组合框序 → asusd 命令（0=不切换，1..4=档位 0..3）。
+fn ac_switch_send(side: &str, idx: u32) {
+    let payload = match (side, idx) {
+        ("ac", 0) => serde_json::json!({"cmd": "ac_switch_set", "on_ac": false}),
+        ("ac", i) => {
+            serde_json::json!({"cmd": "ac_switch_set", "on_ac": true, "profile_on_ac": i - 1})
+        }
+        (_, 0) => serde_json::json!({"cmd": "ac_switch_set", "on_battery": false}),
+        (_, i) => serde_json::json!(
+            {"cmd": "ac_switch_set", "on_battery": true, "profile_on_battery": i - 1}
+        ),
+    };
+    let label = if side == "ac" { "插电" } else { "用电池" };
+    let what = if idx == 0 {
+        "不切换".to_string()
+    } else {
+        format!("档位 {}", idx - 1)
+    };
+    log_line(format!("▶ {label}自动切方案 → {what}"));
+    if ensure_backend() {
+        backend_send(&payload);
+    }
 }
 
 // ---------- 只读监控（免 root） ----------
@@ -700,6 +745,27 @@ impl qobject::AsusTunerObject {
             self.as_mut().set_charge_limit(c as u32);
         }
 
+        // 电源状态自动切换（asusd 6.1+；读取失败 → 整组隐藏）
+        let ac = with_asusd(|p| {
+            Ok::<(bool, u32, bool, u32), zbus::Error>((
+                p.get_property("ChangePlatformProfileOnAc")?,
+                p.get_property("PlatformProfileOnAc")?,
+                p.get_property("ChangePlatformProfileOnBattery")?,
+                p.get_property("PlatformProfileOnBattery")?,
+            ))
+        });
+        match ac {
+            Some((on_a, prof_a, on_b, prof_b)) => {
+                self.as_mut().set_ac_switch_available(true);
+                self.as_mut()
+                    .set_ac_switch_ac(if on_a { (prof_a + 1).min(4) } else { 0 });
+                self.as_mut().set_ac_switch_battery(
+                    if on_b { (prof_b + 1).min(4) } else { 0 },
+                );
+            }
+            None => self.as_mut().set_ac_switch_available(false),
+        }
+
         // CPU 瞬时功率：经 root 后端读 RAPL 能量，差分计算（异步应答，下轮生效）
         if backend_connected() {
             backend_send(&serde_json::json!({"cmd": "rapl"}));
@@ -878,6 +944,16 @@ impl qobject::AsusTunerObject {
             backend_send(&serde_json::json!({"cmd": "profile_delete", "name": n}));
             backend_send(&serde_json::json!({"cmd": "profile_list"}));
         }
+    }
+
+    /// 插电自动切方案：idx 0=不切换，1..=4 → asusd 档位 0..=3。
+    pub fn apply_ac_switch_ac(&self, idx: u32) {
+        ac_switch_send("ac", idx);
+    }
+
+    /// 用电池自动切方案：同上。
+    pub fn apply_ac_switch_battery(&self, idx: u32) {
+        ac_switch_send("battery", idx);
     }
 
     pub fn apply_charge_limit(&self, limit: u32) {

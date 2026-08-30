@@ -1229,6 +1229,67 @@ ApplicationWindow {
                     id: batCol
                     width: parent.width
                     spacing: 10
+                // 电源状态自动切换：asusd 在插电/用电池时自动切换电源管理方案
+                // （"插电后方案被改成性能"的来源；asusd 6.1 以下不支持时整组隐藏）
+                GroupBox {
+                    title: qsTr("电源状态自动切换")
+                    Layout.fillWidth: true
+                    visible: tuner.ac_switch_available
+                    ColumnLayout {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        spacing: 6
+                        RowLayout {
+                            spacing: 10
+                            Layout.fillWidth: true
+                            Label { text: qsTr("插电时切到"); color: palette.text }
+                            ComboBox {
+                                id: acSideCombo
+                                Layout.preferredWidth: 104
+                                model: [qsTr("不切换"), qsTr("平衡"), qsTr("性能"), qsTr("安静"), qsTr("低功耗")]
+                                onActivated: function(i) {
+                                    tuner.applyAcSwitchAc(i)
+                                    cfgRespTimer.restart()
+                                }
+                            }
+                            Item { Layout.fillWidth: true }
+                            Label { text: qsTr("用电池时切到"); color: palette.text }
+                            ComboBox {
+                                id: batSideCombo
+                                Layout.preferredWidth: 104
+                                model: [qsTr("不切换"), qsTr("平衡"), qsTr("性能"), qsTr("安静"), qsTr("低功耗")]
+                                onActivated: function(i) {
+                                    tuner.applyAcSwitchBattery(i)
+                                    cfgRespTimer.restart()
+                                }
+                            }
+                        }
+                        Label {
+                            text: qsTr("由 asusd 在电源状态变化时自动切换方案；选「不切换」即关闭该方向（配置由 asusd 持久化，独立于 AsusTuner 配置方案）")
+                            color: palette.mid
+                            font.pixelSize: 11
+                            wrapMode: Text.Wrap
+                            Layout.fillWidth: true
+                        }
+                        Connections {
+                            target: tuner
+                            // 读回/外部变更 → 同步下拉框（不绑 currentIndex：选中会破坏绑定）
+                            function onAcSwitchAcChanged() {
+                                acSideCombo.currentIndex = tuner.ac_switch_ac
+                            }
+                            function onAcSwitchBatteryChanged() {
+                                batSideCombo.currentIndex = tuner.ac_switch_battery
+                            }
+                            function onAcSwitchAvailableChanged() {
+                                if (tuner.ac_switch_available) {
+                                    acSideCombo.currentIndex = tuner.ac_switch_ac
+                                    batSideCombo.currentIndex = tuner.ac_switch_battery
+                                }
+                            }
+                        }
+                    }
+                }
+
                 GroupBox {
                     title: qsTr("电池健康")
                     Layout.fillWidth: true
