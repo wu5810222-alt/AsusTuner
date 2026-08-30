@@ -27,6 +27,7 @@ ApplicationWindow {
         id: ed
         property var cpuPoints: []
         property var gpuPoints: []
+        property int maxRpm: 6000   // 满转速参考值（PWM 线性换算显示用）
         readonly property color cpuColor: "#2980b9"
         readonly property color gpuColor: "#27ae60"
         property int dragIndex: -1
@@ -37,6 +38,9 @@ ApplicationWindow {
         radius: 4
         onCpuPointsChanged: canvas.requestPaint()
         onGpuPointsChanged: canvas.requestPaint()
+        onMaxRpmChanged: canvas.requestPaint()
+
+        function rpmOf(pwm) { return Math.round(pwm / 255 * maxRpm) }
 
         function p2x(t) { return pad + (t - 40) / 60 * (width - 2 * pad) }
         function p2y(p) { return height - pad - p / 255 * (height - 2 * pad) }
@@ -105,7 +109,8 @@ ApplicationWindow {
                 }
                 ctx.fillStyle = palette.mid
                 ctx.font = "10px sans-serif"
-                ctx.fillText("255", 2, ed.pad + 4)
+                ctx.fillText(ed.maxRpm + "", 2, ed.pad + 4)
+                ctx.fillText(Math.round(ed.maxRpm / 2) + "", 2, ed.pad + (height - 2 * ed.pad) / 2)
                 ctx.fillText("0", 2, height - ed.pad)
                 ctx.fillText("40°", ed.pad, height - 8)
                 ctx.fillText("100°", width - ed.pad - 20, height - 8)
@@ -271,6 +276,7 @@ ApplicationWindow {
         // ===== 页签 =====
         TabBar {
             id: bar
+            currentIndex: 1
             Layout.fillWidth: true
             TabButton { text: qsTr("性能") }
             TabButton { text: qsTr("风扇") }
@@ -622,6 +628,12 @@ ApplicationWindow {
                     {t: 56, p: 10}, {t: 61, p: 20}, {t: 66, p: 85}, {t: 71, p: 130},
                     {t: 76, p: 195}, {t: 80, p: 220}, {t: 85, p: 240}, {t: 97, p: 250}
                 ]
+                property int maxRpm: 6000
+                function toRpmStr(pts) {
+                    var a = []
+                    for (var i = 0; i < pts.length; i++) a.push(Math.round(pts[i].p / 255 * maxRpm))
+                    return a.join(",")
+                }
                 // 变更计数器：驱动"当前生效曲线"标签重新求值
                 property int summaryTick: 0
 
@@ -717,15 +729,24 @@ ApplicationWindow {
                             Rectangle { width: 14; height: 4; radius: 2; color: editor.gpuColor }
                             Label { text: qsTr("GPU 风扇"); color: palette.text; font.pixelSize: 12 }
                             Label {
-                                text: qsTr("两条曲线重合时拖离即可分开")
+                                text: qsTr("重合时拖离即可分开")
                                 color: palette.mid
                                 font.pixelSize: 11
+                            }
+                            Item { Layout.fillWidth: true }
+                            Label { text: qsTr("满转速参考"); color: palette.text; font.pixelSize: 12 }
+                            SpinBox {
+                                id: maxRpmBox
+                                from: 3000; to: 9000; stepSize: 100
+                                editable: true; value: 6000
+                                onValueChanged: fanCol.maxRpm = value
                             }
                         }
                         CurveEditor {
                             id: editor
                             Layout.fillWidth: true
-                            Layout.preferredHeight: 220
+                            Layout.preferredHeight: 320
+                            maxRpm: fanCol.maxRpm
                             cpuPoints: fanCol.cpuPoints
                             gpuPoints: fanCol.gpuPoints
                             onDragged: function(isCpu, newPoints) {
@@ -738,9 +759,9 @@ ApplicationWindow {
                         }
                         Label {
                             text: qsTr("CPU 温度 ") + fanCol.toTempStr(fanCol.cpuPoints)
-                                  + qsTr(" / PWM ") + fanCol.toPwmStr(fanCol.cpuPoints) + "\n"
+                                  + qsTr(" / 转速≈ ") + fanCol.toRpmStr(fanCol.cpuPoints) + " RPM\n"
                                   + qsTr("GPU 温度 ") + fanCol.toTempStr(fanCol.gpuPoints)
-                                  + qsTr(" / PWM ") + fanCol.toPwmStr(fanCol.gpuPoints)
+                                  + qsTr(" / 转速≈ ") + fanCol.toRpmStr(fanCol.gpuPoints) + " RPM"
                             color: palette.mid
                             font.pixelSize: 11
                         }
