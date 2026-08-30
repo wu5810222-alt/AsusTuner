@@ -1,7 +1,7 @@
 // AsusTuner —— G-Helper 风格主界面
 // 头部：标题 + 后端状态灯(点击授权) + 日志面板开关
-// 模式栏：静音/平衡/性能（asusd）
-// 页签：性能 / 风扇 / 电池 / 监控
+// 模式栏：配置方案（后端 profile_list 动态下发，G-Helper 式自定义方案）
+// 页签：性能 / 风扇 / GPU / 电池 / 监控
 // 底部：实时状态条 + 可折叠后端日志/命令行面板
 import QtQuick
 import QtQuick.Controls
@@ -20,6 +20,32 @@ ApplicationWindow {
     color: palette.window
 
     property bool showLog: false
+
+    // ---- 配置方案辅助：解析 cfg_list（每行 "名称\t平台\tbuiltin\tactive"）----
+    function cfgRows() {
+        var lines = tuner.cfg_list.split("\n")
+        var arr = []
+        for (var i = 0; i < lines.length; i++) {
+            var f = lines[i].split("\t")
+            if (f.length >= 4 && f[0].length > 0) {
+                arr.push({name: f[0], platform: f[1], builtin: f[2] === "1", active: f[3] === "1"})
+            }
+        }
+        return arr
+    }
+    function platformLabel(p) {
+        if (p === "quiet") return qsTr("静音")
+        if (p === "performance") return qsTr("性能")
+        if (p === "lowpower") return qsTr("低功耗")
+        return qsTr("平衡")
+    }
+    function activeLabel() {
+        var rows = cfgRows()
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i].active) return rows[i].name
+        }
+        return platformLabel(tuner.platform_profile)
+    }
 
     // 可拖拽风扇曲线编辑器：8 个点，横轴 40-100°C，纵轴 PWM 0-255
     // 双曲线同图编辑器：CPU（蓝）+ GPU（绿），拖拽时自动抓取最近的点
@@ -190,6 +216,130 @@ ApplicationWindow {
         }
     }
 
+    // 方案操作后延迟一拍 refresh：让应答尽快回流 UI（无需等 3s 周期）
+    Timer {
+        id: cfgRespTimer
+        interval: 350
+        onTriggered: tuner.refresh()
+    }
+
+    // ===== 方案管理对话框 =====
+    Dialog {
+        id: cfgDialog
+        modal: true
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: 580
+        title: qsTr("配置方案管理")
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            // 现有方案列表
+            Repeater {
+                model: root.cfgRows()
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 6
+                    Label {
+                        text: modelData.name
+                        color: palette.text
+                        font.bold: modelData.active
+                        Layout.preferredWidth: 110
+                        elide: Text.ElideRight
+                    }
+                    Label {
+                        text: (modelData.builtin ? qsTr("内置 · ") : qsTr("自定义 · "))
+                              + root.platformLabel(modelData.platform)
+                              + (modelData.active ? qsTr(" · 生效中") : "")
+                        color: modelData.active ? "#2ecc71" : palette.mid
+                        font.pixelSize: 11
+                        Layout.fillWidth: true
+                        elide: Text.ElideRight
+                    }
+                    Button {
+                        text: qsTr("应用")
+                        enabled: !modelData.active
+                        onClicked: {
+                            tuner.cfgApply(modelData.name)
+                            cfgRespTimer.restart()
+                        }
+                    }
+                    Button {
+                        text: qsTr("存入当前设置")
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("把当前功率/降压/温度墙/风扇曲线/充电设置覆盖到该方案")
+                        onClicked: {
+                            tuner.cfgSave(modelData.name, modelData.platform, true)
+                            cfgRespTimer.restart()
+                        }
+                    }
+                    Button {
+                        text: qsTr("删除")
+                        enabled: !modelData.builtin
+                        onClicked: {
+                            tuner.cfgDelete(modelData.name)
+                            cfgRespTimer.restart()
+                        }
+                    }
+                }
+            }
+
+            Rectangle { Layout.fillWidth: true; height: 1; color: palette.mid }
+
+            // 新建方案
+            Label { text: qsTr("新建方案"); color: palette.text; font.bold: true }
+            RowLayout {
+                spacing: 8
+                Label { text: qsTr("名称"); color: palette.text }
+                TextField {
+                    id: cfgName
+                    Layout.preferredWidth: 150
+                    placeholderText: qsTr("如：游戏 / 续航")
+                }
+                Label { text: qsTr("电源管理方案"); color: palette.text }
+                ComboBox {
+                    id: cfgPlatform
+                    Layout.preferredWidth: 120
+                    textRole: "label"
+                    model: [
+                        {label: qsTr("静音"), value: "quiet"},
+                        {label: qsTr("平衡"), value: "balanced"},
+                        {label: qsTr("性能"), value: "performance"},
+                        {label: qsTr("低功耗"), value: "lowpower"}
+                    ]
+                }
+            }
+            RowLayout {
+                spacing: 8
+                CheckBox {
+                    id: cfgSnapshot
+                    text: qsTr("包含当前设置（功率墙/降压/风扇曲线/充电）")
+                    checked: true
+                }
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: qsTr("保存方案")
+                    highlighted: true
+                    onClicked: {
+                        var n = cfgName.text.trim()
+                        if (n.length === 0) return
+                        tuner.cfgSave(n, cfgPlatform.model[cfgPlatform.currentIndex].value, cfgSnapshot.checked)
+                        cfgName.text = ""
+                        cfgRespTimer.restart()
+                    }
+                }
+            }
+            Label {
+                text: qsTr("方案 = 电源管理方案（基座）+ 可选捆绑设置；内置三个同名保存即覆盖，删除需自定义方案")
+                color: palette.mid
+                font.pixelSize: 11
+                wrapMode: Text.Wrap
+                Layout.fillWidth: true
+            }
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -239,37 +389,45 @@ ApplicationWindow {
             }
         }
 
-        // ===== 模式栏 =====
+        // ===== 模式栏（配置方案动态渲染）=====
         RowLayout {
             Layout.fillWidth: true
             Layout.leftMargin: 12
             Layout.rightMargin: 12
             Layout.bottomMargin: 4
             spacing: 8
-            Label { text: qsTr("性能模式"); color: palette.text; font.pixelSize: 13 }
-            Button {
-                Layout.preferredWidth: 96
-                highlighted: tuner.platform_profile === "quiet"
-                text: qsTr("静音")
-                onClicked: tuner.applyProfile("quiet")
+            Label { text: qsTr("配置方案"); color: palette.text; font.pixelSize: 13 }
+            Repeater {
+                model: root.cfgRows()
+                Button {
+                    Layout.preferredWidth: Math.min(132, Math.max(76, implicitWidth + 22))
+                    highlighted: modelData.active
+                    text: modelData.name
+                    ToolTip.visible: hovered
+                    ToolTip.text: modelData.active
+                        ? qsTr("方案生效中")
+                        : qsTr("应用方案（基座：%1）").arg(root.platformLabel(modelData.platform))
+                    onClicked: {
+                        tuner.cfgApply(modelData.name)
+                        cfgRespTimer.restart()
+                    }
+                }
             }
-            Button {
-                Layout.preferredWidth: 96
-                highlighted: tuner.platform_profile === "balanced"
-                text: qsTr("平衡")
-                onClicked: tuner.applyProfile("balanced")
-            }
-            Button {
-                Layout.preferredWidth: 96
-                highlighted: tuner.platform_profile === "performance"
-                text: qsTr("性能")
-                onClicked: tuner.applyProfile("performance")
+            Label {
+                visible: tuner.cfg_list.length === 0
+                text: qsTr("等待后端…")
+                color: palette.mid
+                font.pixelSize: 12
             }
             Item { Layout.fillWidth: true }
             Label {
-                text: qsTr("当前: ") + tuner.platform_profile
+                text: qsTr("当前: ") + root.activeLabel()
                 color: palette.mid
                 font.pixelSize: 12
+            }
+            Button {
+                text: qsTr("管理…")
+                onClicked: cfgDialog.open()
             }
         }
 
