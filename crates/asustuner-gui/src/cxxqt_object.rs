@@ -134,6 +134,11 @@ pub mod qobject {
         #[cxx_name = "armourySet"]
         fn armoury_set(&self, attr: &QString, value: u32);
 
+        // iGPU 降压（Curve Optimiser，部分 family 不支持）
+        #[qinvokable]
+        #[cxx_name = "setIgpuCurve"]
+        fn set_igpu_curve(&self, igpu: i32);
+
         // 原始曲线 "t1,..,t8;p1,..,p8"（PWM 0-255 原始值），fan: 0=CPU 1=GPU
         #[qinvokable]
         #[cxx_name = "fanCurveRaw"]
@@ -861,6 +866,12 @@ impl qobject::AsusTunerObject {
     pub fn restore_fan_curves(&self) {
         log_line("▶ 恢复默认风扇曲线".to_string());
         backend_send(&serde_json::json!({"cmd": "fan_defaults"}));
+    }
+
+    /// iGPU 降压：仅发 cogfx（all_cores=0 表示不变更）。
+    pub fn set_igpu_curve(&self, igpu: i32) {
+        log_line(format!("▶ iGPU 降压 cogfx={igpu}"));
+        backend_send(&serde_json::json!({"cmd": "set_curve", "all_cores": 0, "igpu": igpu}));
     }
 
     pub fn armoury_set(&self, attr: &QString, value: u32) {

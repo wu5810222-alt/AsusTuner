@@ -276,7 +276,7 @@ ApplicationWindow {
         // ===== 页签 =====
         TabBar {
             id: bar
-            currentIndex: 1
+
             Layout.fillWidth: true
             TabButton { text: qsTr("性能") }
             TabButton { text: qsTr("风扇") }
@@ -496,7 +496,7 @@ ApplicationWindow {
                                 }
                             }
                             Label {
-                                text: qsTr("负值降压 = 降功耗降温度；若出现不稳定请回调至 0")
+                                text: qsTr("负值降压 = 降功耗降温度（仅 CPU 全核；iGPU 降压在 GPU 页）；若不稳定请回调至 0")
                                 color: palette.mid
                                 font.pixelSize: 11
                             }
@@ -950,6 +950,42 @@ ApplicationWindow {
                                     .arg(tuner.nv_temp_min).arg(tuner.nv_temp_max)
                                 color: palette.mid
                                 font.pixelSize: 11
+                            }
+                        }
+                    }
+
+                    GroupBox {
+                        title: qsTr("iGPU 降压 (Curve Optimiser)")
+                        Layout.fillWidth: true
+                        visible: tuner.nv_available
+                        ColumnLayout {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            spacing: 4
+                            RowLayout {
+                                Layout.fillWidth: true
+                                Slider {
+                                    id: igpuSlider
+                                    Layout.fillWidth: true
+                                    from: 0; to: -30; stepSize: 1
+                                    value: -10
+                                }
+                                Label {
+                                    text: igpuSlider.value === 0 ? qsTr("关闭") : qsTr("%1 (降压)").arg(igpuSlider.value)
+                                    color: palette.text
+                                    Layout.preferredWidth: 90
+                                }
+                                Button {
+                                    text: qsTr("应用")
+                                    onClicked: tuner.setIgpuCurve(igpuSlider.value)
+                                }
+                            }
+                            Label {
+                                text: qsTr("iGPU (核显) 降压；是否支持取决于 CPU family——Dragon Range(7940HX) 不支持，应用将报失败")
+                                color: palette.mid
+                                font.pixelSize: 11
+                                wrapMode: Text.Wrap
+                                Layout.fillWidth: true
                             }
                         }
                     }
