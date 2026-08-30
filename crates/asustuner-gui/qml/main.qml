@@ -274,6 +274,7 @@ ApplicationWindow {
             Layout.fillWidth: true
             TabButton { text: qsTr("性能") }
             TabButton { text: qsTr("风扇") }
+            TabButton { text: qsTr("GPU") }
             TabButton { text: qsTr("电池") }
             TabButton { text: qsTr("监控") }
         }
@@ -787,6 +788,154 @@ ApplicationWindow {
                 }
             }
 
+            // ---------- GPU 页 ----------
+            Flickable {
+                contentHeight: gpuCol.height
+                clip: true
+                ScrollBar.vertical: ScrollBar { }
+                ColumnLayout {
+                    id: gpuCol
+                    width: parent.width
+                    spacing: 10
+
+                    Label {
+                        visible: !tuner.nv_available
+                        text: qsTr("未检测到 dGPU 固件接口（无 N 卡或内核过旧）")
+                        color: palette.mid
+                    }
+
+                    GroupBox {
+                        title: qsTr("GPU 模式（MUX 切换）")
+                        Layout.fillWidth: true
+                        visible: tuner.nv_available
+                        ColumnLayout {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            spacing: 8
+                            Label {
+                                visible: tuner.gpu_reboot_pending
+                                text: qsTr("⚠ 有更改等待重启生效")
+                                color: "#e67e22"
+                                font.pixelSize: 12
+                            }
+                            RowLayout {
+                                spacing: 8
+                                Button {
+                                    text: qsTr("省电 (Eco)")
+                                    highlighted: tuner.dgpu_off
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: qsTr("禁用独显，仅核显输出")
+                                    onClicked: {
+                                        tuner.armourySet("gpu_mux_mode", 0)
+                                        tuner.armourySet("dgpu_disable", 1)
+                                    }
+                                }
+                                Button {
+                                    text: qsTr("混合 (Hybrid)")
+                                    highlighted: !tuner.dgpu_off && tuner.gpu_mux === 0
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: qsTr("双显卡切换，默认模式")
+                                    onClicked: {
+                                        tuner.armourySet("gpu_mux_mode", 0)
+                                        tuner.armourySet("dgpu_disable", 0)
+                                    }
+                                }
+                                Button {
+                                    text: qsTr("独显直连")
+                                    highlighted: tuner.gpu_mux === 1
+                                    ToolTip.visible: hovered
+                                    ToolTip.text: qsTr("独显直驱屏幕，性能最佳")
+                                    onClicked: {
+                                        tuner.armourySet("gpu_mux_mode", 1)
+                                        tuner.armourySet("dgpu_disable", 0)
+                                    }
+                                }
+                            }
+                            Label {
+                                text: qsTr("当前: MUX=%1（0=混合 1=直连），独显%2，需重启后完全生效")
+                                    .arg(tuner.gpu_mux).arg(tuner.dgpu_off ? qsTr("禁用") : qsTr("启用"))
+                                color: palette.mid
+                                font.pixelSize: 11
+                                wrapMode: Text.Wrap
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+
+                    GroupBox {
+                        title: qsTr("dGPU 功耗 / 温度")
+                        Layout.fillWidth: true
+                        visible: tuner.nv_available
+                        ColumnLayout {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            spacing: 8
+
+                            Timer {
+                                interval: 800
+                                running: true
+                                repeat: false
+                                onTriggered: {
+                                    if (tuner.nv_available) {
+                                        nvTempSlider.value = tuner.nv_temp
+                                        nvBoostSlider.value = tuner.nv_boost
+                                    }
+                                }
+                            }
+                            Connections {
+                                target: tuner
+                                function onNvAvailableChanged() {
+                                    if (tuner.nv_available) {
+                                        nvTempSlider.value = tuner.nv_temp
+                                        nvBoostSlider.value = tuner.nv_boost
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                spacing: 10
+                                Layout.fillWidth: true
+                                Label { text: qsTr("温度墙"); color: palette.text; Layout.preferredWidth: 64 }
+                                Slider {
+                                    id: nvTempSlider
+                                    Layout.fillWidth: true
+                                    from: tuner.nv_temp_min; to: tuner.nv_temp_max; stepSize: 1
+                                }
+                                Label { text: nvTempSlider.value + " °C"; color: palette.text; Layout.preferredWidth: 56 }
+                                Button {
+                                    text: qsTr("应用")
+                                    onClicked: tuner.armourySet("nv_temp_target", nvTempSlider.value)
+                                }
+                            }
+                            RowLayout {
+                                spacing: 10
+                                Layout.fillWidth: true
+                                Label { text: qsTr("动态加速"); color: palette.text; Layout.preferredWidth: 64 }
+                                Slider {
+                                    id: nvBoostSlider
+                                    Layout.fillWidth: true
+                                    from: tuner.nv_boost_min; to: tuner.nv_boost_max; stepSize: 1
+                                }
+                                Label { text: nvBoostSlider.value + " W"; color: palette.text; Layout.preferredWidth: 56 }
+                                Button {
+                                    text: qsTr("应用")
+                                    onClicked: tuner.armourySet("nv_dynamic_boost", nvBoostSlider.value)
+                                }
+                            }
+                            Label {
+                                text: qsTr("TGP: %1W（基础 %2W）· 温度墙范围 %3-%4°C")
+                                    .arg(tuner.nv_tgp.toFixed(0)).arg(tuner.nv_base.toFixed(0))
+                                    .arg(tuner.nv_temp_min).arg(tuner.nv_temp_max)
+                                color: palette.mid
+                                font.pixelSize: 11
+                            }
+                        }
+                    }
+
+                    Item { Layout.fillHeight: true }
+                }
+            }
+
             // ---------- 电池页 ----------
             Flickable {
                 contentHeight: batCol.height
@@ -796,6 +945,28 @@ ApplicationWindow {
                     id: batCol
                     width: parent.width
                     spacing: 10
+                GroupBox {
+                    title: qsTr("电池健康")
+                    Layout.fillWidth: true
+                    GridLayout {
+                        anchors.fill: parent
+                        columns: 2
+                        columnSpacing: 20
+                        rowSpacing: 6
+                        Label { text: qsTr("健康度"); color: palette.text }
+                        Label {
+                            text: tuner.battery_health.toFixed(1) + " %"
+                            color: tuner.battery_health >= 80 ? "#2ecc71" : "#e67e22"
+                        }
+                        Label { text: qsTr("循环次数"); color: palette.text }
+                        Label { text: tuner.battery_cycles + qsTr(" 次"); color: palette.text }
+                        Label { text: qsTr("电压"); color: palette.text }
+                        Label { text: tuner.battery_voltage.toFixed(2) + " V"; color: palette.text }
+                        Label { text: qsTr("瞬时功率"); color: palette.text }
+                        Label { text: tuner.battery_power.toFixed(1) + " W"; color: palette.text }
+                    }
+                }
+
                 GroupBox {
                     title: qsTr("充电限制（延长电池寿命）")
                     Layout.fillWidth: true

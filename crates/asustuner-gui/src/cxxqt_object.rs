@@ -29,6 +29,22 @@ pub mod qobject {
         #[qproperty(u32, ppt_min)]
         #[qproperty(u32, ppt_max)]
         #[qproperty(bool, ppt_available)]
+        #[qproperty(bool, nv_available)]
+        #[qproperty(f64, nv_temp)]
+        #[qproperty(u32, nv_temp_min)]
+        #[qproperty(u32, nv_temp_max)]
+        #[qproperty(f64, nv_boost)]
+        #[qproperty(u32, nv_boost_min)]
+        #[qproperty(u32, nv_boost_max)]
+        #[qproperty(f64, nv_tgp)]
+        #[qproperty(f64, nv_base)]
+        #[qproperty(u32, gpu_mux)]
+        #[qproperty(bool, dgpu_off)]
+        #[qproperty(bool, gpu_reboot_pending)]
+        #[qproperty(f64, battery_health)]
+        #[qproperty(u32, battery_cycles)]
+        #[qproperty(f64, battery_voltage)]
+        #[qproperty(f64, battery_power)]
         #[qproperty(u32, charge_limit)]
         #[qproperty(bool, backend_running)]
         #[namespace = "asustuner"]
@@ -113,6 +129,11 @@ pub mod qobject {
         #[cxx_name = "fanCurveSummary"]
         fn fan_curve_summary(&self) -> QString;
 
+        // 固件属性写入（后端白名单校验）
+        #[qinvokable]
+        #[cxx_name = "armourySet"]
+        fn armoury_set(&self, attr: &QString, value: u32);
+
         // 原始曲线 "t1,..,t8;p1,..,p8"（PWM 0-255 原始值），fan: 0=CPU 1=GPU
         #[qinvokable]
         #[cxx_name = "fanCurveRaw"]
@@ -174,6 +195,22 @@ pub struct AsusTunerRust {
     ppt_min: u32,
     ppt_max: u32,
     ppt_available: bool,
+    nv_available: bool,
+    nv_temp: f64,
+    nv_temp_min: u32,
+    nv_temp_max: u32,
+    nv_boost: f64,
+    nv_boost_min: u32,
+    nv_boost_max: u32,
+    nv_tgp: f64,
+    nv_base: f64,
+    gpu_mux: u32,
+    dgpu_off: bool,
+    gpu_reboot_pending: bool,
+    battery_health: f64,
+    battery_cycles: u32,
+    battery_voltage: f64,
+    battery_power: f64,
     charge_limit: u32,
     backend_running: bool,
 }
@@ -198,6 +235,22 @@ impl Default for AsusTunerRust {
             ppt_min: 0,
             ppt_max: 0,
             ppt_available: false,
+            nv_available: false,
+            nv_temp: 0.0,
+            nv_temp_min: 0,
+            nv_temp_max: 0,
+            nv_boost: 0.0,
+            nv_boost_min: 0,
+            nv_boost_max: 0,
+            nv_tgp: 0.0,
+            nv_base: 0.0,
+            gpu_mux: 0,
+            dgpu_off: false,
+            gpu_reboot_pending: false,
+            battery_health: 0.0,
+            battery_cycles: 0,
+            battery_voltage: 0.0,
+            battery_power: 0.0,
             charge_limit: 100,
             backend_running: false,
         }
@@ -460,6 +513,14 @@ fn read_cpu_freq() -> Option<f64> {
     }
 }
 
+fn read_bat_f64(field: &str) -> Option<f64> {
+    std::fs::read_to_string(format!("/sys/class/power_supply/BAT0/{field}"))
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
 /// asus-armoury 固件属性读取（0644 世界可读，免 root）。
 fn read_armoury(attr: &str, field: &str) -> Option<u32> {
     std::fs::read_to_string(format!(
@@ -601,6 +662,66 @@ impl qobject::AsusTunerObject {
             }
         }
 
+        // 电池健康（标准 sysfs）
+        let e_full = read_bat_f64("energy_full");
+        let e_design = read_bat_f64("energy_full_design");
+        if let (Some(full), Some(design)) = (e_full, e_design) {
+            if design > 0.0 {
+                self.as_mut().set_battery_health(full / design * 100.0);
+            }
+        }
+        if let Some(c) = std::fs::read_to_string("/sys/class/power_supply/BAT0/cycle_count")
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+        {
+            self.as_mut().set_battery_cycles(c);
+        }
+        if let Some(v) = read_bat_f64("voltage_now") {
+            self.as_mut().set_battery_voltage(v / 1e6);
+        }
+        if let Some(w) = read_bat_f64("power_now") {
+            self.as_mut().set_battery_power(w / 1e6);
+        }
+
+        // GPU：asus-armoury nv_*（温度墙/动态加速/TGP）与模式
+        let nv_t = read_armoury("nv_temp_target", "current_value");
+        let nv_b = read_armoury("nv_dynamic_boost", "current_value");
+        match (nv_t, nv_b) {
+            (Some(t), Some(b)) => {
+                self.as_mut().set_nv_available(true);
+                self.as_mut().set_nv_temp(t as f64);
+                self.as_mut().set_nv_boost(b as f64);
+                if let Some(mn) = read_armoury("nv_temp_target", "min_value") {
+                    self.as_mut().set_nv_temp_min(mn);
+                }
+                if let Some(mx) = read_armoury("nv_temp_target", "max_value") {
+                    self.as_mut().set_nv_temp_max(mx);
+                }
+                if let Some(mn) = read_armoury("nv_dynamic_boost", "min_value") {
+                    self.as_mut().set_nv_boost_min(mn);
+                }
+                if let Some(mx) = read_armoury("nv_dynamic_boost", "max_value") {
+                    self.as_mut().set_nv_boost_max(mx);
+                }
+            }
+            _ => self.as_mut().set_nv_available(false),
+        }
+        if let Some(v) = read_armoury("nv_tgp", "current_value") {
+            self.as_mut().set_nv_tgp(v as f64);
+        }
+        if let Some(v) = read_armoury("nv_base_tgp", "current_value") {
+            self.as_mut().set_nv_base(v as f64);
+        }
+        if let Some(m) = read_armoury("gpu_mux_mode", "current_value") {
+            self.as_mut().set_gpu_mux(m);
+        }
+        if let Some(d) = read_armoury("dgpu_disable", "current_value") {
+            self.as_mut().set_dgpu_off(d == 1);
+        }
+        if let Some(p) = read_armoury("pending_reboot", "current_value") {
+            self.as_mut().set_gpu_reboot_pending(p == 1);
+        }
+
         // asus-armoury 功率墙读回（PL1=STAPM / PL2=SPPT(慢) / PL3=FPPT(快)）
         let (pl1, pl2, pl3) = (
             read_armoury("ppt_pl1_spl", "current_value"),
@@ -740,6 +861,12 @@ impl qobject::AsusTunerObject {
     pub fn restore_fan_curves(&self) {
         log_line("▶ 恢复默认风扇曲线".to_string());
         backend_send(&serde_json::json!({"cmd": "fan_defaults"}));
+    }
+
+    pub fn armoury_set(&self, attr: &QString, value: u32) {
+        let a: String = attr.into();
+        log_line(format!("▶ armoury {a} = {value}"));
+        backend_send(&serde_json::json!({"cmd": "armoury_set", "attr": a, "value": value}));
     }
 
     pub fn fan_curve_summary(&self) -> QString {
