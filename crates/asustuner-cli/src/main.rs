@@ -206,10 +206,13 @@ fn parse_u8_array(s: &str) -> Result<Vec<u8>> {
 
 fn print_sensors() {
     println!("=== 实时监控（只读 sysfs）===");
-    if let Some(t) = read_temp("k10temp") {
+    // 温度源探测：AMD=k10temp/amdgpu，Intel=coretemp/i915
+    let cpu_temp = ["k10temp", "coretemp"].iter().find_map(|n| read_temp(n));
+    let igpu_temp = ["amdgpu", "i915"].iter().find_map(|n| read_temp(n));
+    if let Some(t) = cpu_temp {
         println!("CPU 温度: {t:.1} °C");
     }
-    if let Some(t) = read_temp("amdgpu") {
+    if let Some(t) = igpu_temp {
         println!("iGPU 温度: {t:.1} °C");
     }
     if let Some(f) = read_cpu_freq() {

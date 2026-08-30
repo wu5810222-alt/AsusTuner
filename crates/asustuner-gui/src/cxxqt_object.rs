@@ -51,6 +51,8 @@ pub mod qobject {
         #[qproperty(bool, backend_running)]
         // 配置方案列表（每行 "名称\t平台\tbuiltin\tactive"，Tab 分隔）
         #[qproperty(QString, cfg_list)]
+        // AMD 功控可用（ryzenadj + AuthenticAMD）：控制降压/温度墙控件显隐
+        #[qproperty(bool, amd_adj)]
         #[namespace = "asustuner"]
         type AsusTunerObject = super::AsusTunerRust;
 
@@ -246,6 +248,7 @@ pub struct AsusTunerRust {
     charge_limit: u32,
     backend_running: bool,
     cfg_list: QString,
+    amd_adj: bool,
 }
 
 impl Default for AsusTunerRust {
@@ -289,6 +292,7 @@ impl Default for AsusTunerRust {
             charge_limit: 100,
             backend_running: false,
             cfg_list: QString::from(""),
+            amd_adj: false,
         }
     }
 }
@@ -509,6 +513,23 @@ fn read_sys_temp(hwmon_name: &str) -> Option<f64> {
     None
 }
 
+/// CPU/iGPU 温度源探测：AMD=k10temp/amdgpu，Intel=coretemp/i915。
+fn read_cpu_temp() -> Option<f64> {
+    ["k10temp", "coretemp"].iter().find_map(|n| read_sys_temp(n))
+}
+fn read_igpu_temp() -> Option<f64> {
+    ["amdgpu", "i915"].iter().find_map(|n| read_sys_temp(n))
+}
+
+/// AMD 功控可用 = ryzenadj 存在 且 CPU vendor 为 AuthenticAMD
+/// （与 backend caps::detect 同条件；控制降压/温度墙控件显隐）
+fn detect_amd_adj() -> bool {
+    std::path::Path::new("/usr/sbin/ryzenadj").exists()
+        && std::fs::read_to_string("/proc/cpuinfo")
+            .map(|s| s.contains("AuthenticAMD"))
+            .unwrap_or(false)
+}
+
 fn read_fan_rpms() -> (f64, f64) {
     let dir = match std::fs::read_dir("/sys/class/hwmon") {
         Ok(d) => d,
@@ -628,6 +649,7 @@ fn current_platform_profile() -> anyhow::Result<u32> {
 impl qobject::AsusTunerObject {
     pub fn connect_dbus(mut self: Pin<&mut Self>) {
         ensure_asusd();
+        self.as_mut().set_amd_adj(detect_amd_adj());
         if let Some(s) = detect_board_name() {
             self.as_mut().set_board_name(QString::from(s));
         }
@@ -651,10 +673,10 @@ impl qobject::AsusTunerObject {
 
     pub fn refresh(mut self: Pin<&mut Self>) {
         ensure_asusd();
-        if let Some(t) = read_sys_temp("k10temp") {
+        if let Some(t) = read_cpu_temp() {
             self.as_mut().set_cpu_temp(t);
         }
-        if let Some(t) = read_sys_temp("amdgpu") {
+        if let Some(t) = read_igpu_temp() {
             self.as_mut().set_dgpu_temp(t);
         }
         if let Some(f) = read_cpu_freq() {

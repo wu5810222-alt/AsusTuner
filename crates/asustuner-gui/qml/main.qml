@@ -671,6 +671,8 @@ ApplicationWindow {
                     GroupBox {
                         title: qsTr("CPU 降压 (Curve Optimiser)")
                         Layout.fillWidth: true
+                        // AMD 专属（ryzenadj/SMU）；Intel 机型 MSR 普遍锁定，直接隐藏
+                        visible: tuner.amd_adj
                         ColumnLayout {
                             anchors.fill: parent
                             spacing: 4
@@ -707,9 +709,9 @@ ApplicationWindow {
                         RowLayout {
                             anchors.fill: parent
                             spacing: 12
-                            Label { text: qsTr("Tctl 温度墙"); color: palette.text }
-                            SpinBox { id: tctlBox; from: 75; to: 100; value: 90 }
-                            Button { text: qsTr("应用"); onClicked: tuner.setTempLimit(tctlBox.value) }
+                            Label { text: qsTr("Tctl 温度墙"); color: palette.text; visible: tuner.amd_adj }
+                            SpinBox { id: tctlBox; from: 75; to: 100; value: 90; visible: tuner.amd_adj }
+                            Button { text: qsTr("应用"); visible: tuner.amd_adj; onClicked: tuner.setTempLimit(tctlBox.value) }
                             Item { Layout.fillWidth: true }
                             Label { text: qsTr("CPU Boost"); color: palette.text }
                             Switch {
