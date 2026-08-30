@@ -1,6 +1,6 @@
 # AsusTuner
 
-[English](README_EN.md) | **简体中文**
+[English](README.md) | **简体中文**
 
 专为 **ASUS 天选 / TUF / ROG / 幻** 系列笔记本开发的 Linux 系统控制工具。
 借鉴 [G-Helper](https://github.com/seerge/g-helper) 的功能，**直接调用系统已有的 `asusd`（华硕官方守护进程）和 `ryzenadj`**，摒弃 Armoury Crate 的庞杂，也不重复造轮子。
@@ -55,9 +55,39 @@ AsusTuner/
 
 ## 系统依赖
 
+**构建依赖（所有发行版）：** Rust 工具链 · C++ 编译器（gcc/clang——cxx-qt 要编译生成的 C++ 代码）· Qt 6 ≥ 6.5（`qt6-base` 头文件、`qt6-declarative` 即 QtQuick/QML、Wayland 会话需要 `qt6-wayland`）。polkit/pkexec 桌面发行版均预装。
+
+**运行依赖（运行时自动探测，缺失即优雅降级）：**
+- `asusd`（软件包名 `asusctl`）——**ASUS 机型必装**：档位/充电限制/风扇曲线/灯效/GPU 模式全靠它。
+- `ryzenadj`——**仅 AMD CPU**，可选：CPU 降压、温度墙、功率墙回退路径。
+
 ```bash
-sudo pacman -S cargo rust cmake qt6-base qt6-declarative asusd ryzenadj
+# Arch / Arch 系
+sudo pacman -S --needed base-devel rust qt6-base qt6-declarative qt6-wayland asusctl
+# ryzenadj（仅 AMD）在 AUR：
+paru -S ryzenadj                    # 或 yay -S ryzenadj
+
+# Debian / Ubuntu（24.04+；Qt6 把 QML 拆成了独立包）
+sudo apt install build-essential cargo qt6-base-dev qt6-declarative-dev qt6-wayland \
+  qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+  qml6-module-qtquick-templates qml6-module-qtquick-window qml6-module-qtqml-workerscript
+# asusctl 没有官方 Debian 包——按 https://asus-linux.org 从源码编译
+# ryzenadj（仅 AMD）无包，源码编译：
+sudo apt install cmake libpci-dev
+git clone https://github.com/FlyGoat/RyzenAdj && cd RyzenAdj \
+  && cmake -B build && cmake --build build && sudo cmake --install build
+
+# Fedora
+sudo dnf install rust cargo gcc-c++ qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtwayland
+sudo dnf copr enable lukenukem/asus-linux && sudo dnf install asusctl
+# ryzenadj（仅 AMD）：sudo dnf install cmake libpci-devel 后按上文源码编译
+
+# openSUSE
+sudo zypper install rust cargo gcc-c++ qt6-base-devel qt6-declarative-devel qt6-wayland
+# asusctl：OBS 源（见 asus-linux.org）；ryzenadj：源码编译同上
 ```
+
+NixOS：nixpkgs 自带 `asusctl`（`services.hardware.asusd`）；构建 shell 里提供 Qt6（`qt6.qtbase` / `qt6.qtdeclarative` / `qt6.qtwayland`）。尚未打包成 flake。
 
 ## 安装（推荐）
 
@@ -67,7 +97,19 @@ cd AsusTuner
 sudo ./install.sh
 ```
 
-`install.sh` 会编译 release、把四个二进制装到 `/usr/bin`、启用 `asustuner-backend.service`、并把托盘加入桌面自启动。之后托盘常驻面板，主窗口从托盘按需打开。
+`install.sh` 会编译 release、把四个二进制装到 `/usr/bin`、启用 `asustuner-backend.service`、安装托盘桌面自启动 **和** systemd user 单元（`asustuner-tray.service`，只装不启——给没有 XDG autostart 的合成器用），并在检测到「GNOME 未装 appindicator 扩展 / 缺 asusd / 缺 ryzenadj」时给出非阻断提示。之后托盘常驻面板，主窗口从托盘按需打开。
+
+## 桌面环境适配
+
+| 桌面 | 托盘（SNI） | polkit agent | 说明 |
+|---|---|---|---|
+| KDE Plasma | ✅ 原生 | ✅ 自带 | 开箱即用 |
+| GNOME | ⚠️ 需扩展 | ✅ 自带 | 安装 `gnome-shell-extension-appindicator`（或 extensions.gnome.org）并启用 |
+| XFCE / Cinnamon / MATE | ✅ | ✅ 自带 | X11 正常 |
+| Waybar + niri / sway / hyprland | ✅ Waybar `tray` 模块 | ⚠️ 需自启 | 托盘自启动：`systemctl --user enable --now asustuner-tray` |
+| 无面板合成器 | ❌ 无托盘 | — | 用 `asustuner-cli`；后端照常保持状态 |
+
+精简合成器（niri/hyprland/sway）记得自启一个 **polkit agent**（如 `polkit-gnome-authentication-agent-1`、`lxpolkit`、`polkit-kde-agent`）——没有它 GUI 无法拉起 root 后端，出现这种情况时 GUI 日志面板会明确提示。KDE 之外的 Qt 美化（可选）：`adwaita-qt` / `qt6ct`。
 
 ## 从源码运行 GUI（开发）
 
@@ -105,9 +147,18 @@ asustuner-cli fan-set --temp "56,61,66,71,76,80,85,97" --pwm "0,3,23,51,56,120,1
 - **传感器监控**（k10temp/amdgpu/风扇/电池/cpufreq）：只读 sysfs，免 root。
 - **RAPL CPU 功率**：仅 root 可读，由后端代读供监控页显示。
 
-## 适配其它机型
+## 硬件与平台兼容性
 
-本工具通过 asusd / asus-armoury / ryzenadj 的通用接口工作，天然适配所有被 asusd 支持的天选 / TUF / ROG / 幻机型，新增机型无需改核心代码。能力在运行时探测：机型缺失的固件属性自动隐藏，无 armoury 时功率墙滑条回退 ryzenadj 路径。
+摘要版——完整矩阵（功能 × CPU 平台 × 桌面）见 [COMPATIBILITY.md](COMPATIBILITY.md)：
+
+| 能力类别 | ASUS + AMD（已实测） | ASUS + Intel | 非 ASUS |
+|---|---|---|---|
+| 档位 / 充电限制 / 风扇曲线 / 灯效 / MUX·dGPU | ✅ asusd + armoury | ✅ 相同（与 CPU 平台无关） | ❌ 无 asusd——路线图 |
+| 功率墙 PL1/PL2/PL3 | ✅ armoury，回退 ryzenadj | ✅ armoury（无 ryzenadj 回退） | ❌ 各家固件不同 |
+| CPU 降压 / Tctl 温度墙 | ✅ ryzenadj | ❌ 自动隐藏（Intel 机型 MSR 普遍被锁） | ❌ |
+| Boost / 传感器 / 电池 / RAPL 功率 | ✅ 标准 Linux | ✅ 标准 Linux（自动探测 coretemp / i915） | ✅ 标准 Linux |
+
+全部能力运行时探测（`caps.rs`）：机型缺失的固件属性自动隐藏，温度源与 RAPL 域自动识别（k10temp/coretemp、amdgpu/i915、`intel-rapl:0`/`amd-rapl:*`），AMD 专属控件在 Intel 机器上干净消失、不报错。asusd 支持的机型（天选 / TUF / ROG / 幻 …）无需改代码；非 ASUS 支持预留了架构接缝（见 COMPATIBILITY.md §4）。
 
 ## 许可
 

@@ -210,6 +210,7 @@ gdbus call --system --dest xyz.ljones.Asusd --object-path /xyz/ljones \
 - **gui/cli**：温度源探测 k10temp→coretemp、amdgpu→i915；`amd_adj` qproperty 控制 CPU 降压组/温度墙控件显隐（Intel 干净隐藏）
 - **桌面兼容**：tray 单实例锁（防 autostart+user unit 双开）；`systemd/asustuner-tray.service`（user 级，装而不启，niri/hyprland 用）；install.sh GNOME/asusd/ryzenadj 缺失提示；GUI pkexec 失败明确提示 polkit agent 缺失
 - **健壮性顺手**：gui fan_curves panic→Result；`ASUSTUNER_SOCK_MODE`（默认 0666 不变，多用户机可收紧）
+- **文档**：README 双语补充——分发行版依赖安装（Arch/Debian/Fedora/openSUSE/NixOS，修正 Arch 包名 asusctl、ryzenadj 属 AUR、Debian 需 qml6-module-* 拆分包）、桌面环境适配表（SNI/polkit agent/user unit）、兼容矩阵摘要链接 COMPATIBILITY.md
 - 单测 10 个全过（backend caps 5 + gui 5）；本机 caps 全命中验证；README 双语版为用户维护（未提交的改动未动）
 
 **待办（优先级序）**：
